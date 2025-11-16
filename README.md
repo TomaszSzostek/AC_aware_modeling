@@ -1,16 +1,26 @@
-## Activity Cliff-Aware QSAR Modeling Pipeline
+## Activity Cliff-Aware Reverse QSAR Modeling 
 
-A Python framework for activity cliff-aware quantitative structure–activity relationship (QSAR) modeling and fragment-based molecular generation. The pipeline integrates cheminformatics and machine learning components to build predictive models that explicitly account for activity cliffs—structurally similar molecules with markedly different potencies.
+[![Python](https://img.shields.io/badge/Python-3.10-blue.svg)](https://www.python.org/)
+[![RDKit](https://img.shields.io/badge/RDKit-2023.09.5-forestgreen.svg)](https://www.rdkit.org/)
+[![Cliff_Aware](https://img.shields.io/badge/Cliff__Aware-CAFE%20%2B%20CAFE%20LATE-orange.svg)](#cafe--cafe-late-at-a-glance)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey.svg)](#license)
+
+A compact workflow that turns activity cliffs into a design asset: CAFE mines cliff-enriched fragments from QSAR data, while CAFE LATE uses them to steer fragment-based molecular generation.
+
+### CAFE / CAFE LATE at a glance
+
+| 🧬 **CAFE** – Cliff-Aware Fragment Extraction | 🧪 **CAFE LATE** – Late Activity Tuning | 🔍 **Reverse QSAR** – Fragment Mining | 🧱 **AC-Aware Generation** |
+| :------------------------------------------- | :-------------------------------------- | :------------------------------------ | :-------------------------- |
+| Mines activity-cliff-enriched fragments from QSAR data using BRICS, classical ML models and SHAP-based importance. | Adjusts QSAR probabilities for new molecules that contain AC-enriched fragments, sharpening predictions near cliffs. | Learns which fragments drive activity jumps and ranks models by AUPRC₍active₎ with bootstrap CIs. | Assembles new molecules around core scaffolds, scores them with QSAR + SA + QED + CAFE LATE and returns a diverse, AC-aware hit list. |
 
 ## Key Features
 
-- **Activity cliff-aware QSAR modeling**: Models evaluated with dedicated cliff-aware metrics (Cliff_RMSE).
-- **Multiple molecular representations**: ECFP (1024/2048 bits), MACCS keys, RDKit and Mordred descriptors.
-- **Feature selection**: Boruta-based feature selection tailored to small datasets (~350 compounds).
-- **Group-based data splitting**: Splits that keep activity cliff groups together (cliff_group or Butina clustering) to limit data leakage.
-- **Reverse QSAR**: Fragment extraction using BRICS, multi-model evaluation, SHAP importance and AC enrichment.
-- **AC-aware molecular generation**: Fragment-based generator using AC-enriched fragments with multi-objective scoring (QSAR, SA, QED).
-- **Reproducible evaluation**: Bootstrap confidence intervals, y-scrambling and repeated cross-validation.
+- **CAFE / CAFE LATE built in**: Two-stage use of activity cliffs – first for fragment mining, then for late-stage reweighting of QSAR scores.
+- **Cliff-aware QSAR**: Models evaluated with Cliff_RMSE, AUPRC₍active₎ and grouped splits (cliff_group / Butina) to avoid leakage.
+- **Rich molecular representations**: ECFP (1024/2048 bits), MACCS keys, RDKit and Mordred descriptors with Boruta feature selection.
+- **Reverse QSAR engine**: BRICS fragmentation plus up to 9 classical ML models and SHAP-driven fragment ranking.
+- **Fragment-based molecular generation**: Island algorithm over user-defined cores with multi-objective scoring (activity, synthetic accessibility, drug-likeness).
+
 
 ## Table of Contents
 
@@ -19,75 +29,57 @@ A Python framework for activity cliff-aware quantitative structure–activity re
  - [Pipeline Overview](#pipeline-overview)
  - [Configuration](#configuration)
  - [Usage](#usage)
- - [Methodology](#methodology)
- - [Output](#output)
- - [Reproducibility](#reproducibility)
+ - [Adaptability](#adaptability)
  - [Citation](#citation)
  - [License](#license)
 
 ## Installation
-
-### Prerequisites
-
-- Python 3.10
-- Conda (Miniconda or Anaconda)
-
 ### Setup
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/yourusername/AC-aware-modeling.git
-cd AC-aware-modeling
+  git clone https://github.com/yourusername/AC-aware-modeling.git
+  cd AC-aware-modeling
 ```
 
 2. **Create and activate conda environment**:
 ```bash
-conda env create -f environment.yaml
-conda activate ac-aware-modeling
+  conda env create -f environment.yaml
+  conda activate ac-aware-modeling
 ```
-
-3. **Verify installation**:
-```bash
-python -c "import rdkit; import sklearn; import shap; print('All dependencies imported successfully')"
-```
-
-### Dependencies
-
-The pipeline requires the following key packages:
-- **RDKit** (2023.09.5): Cheminformatics toolkit
-- **scikit-learn** (≥1.4): Machine learning algorithms
-- **SHAP** (≥0.45): Model interpretability
-- **pandas**, **numpy**: Data manipulation
-- **matplotlib**, **seaborn**: Visualization
-- **networkx**: Graph algorithms for activity cliff grouping
-- **Mordred**: Molecular descriptor calculation
-- **Boruta_py**: Feature selection
-
-Optional dependencies (for specific models):
-- **xgboost**: XGBoost gradient boosting
-- **catboost**: CatBoost gradient boosting
-- **imbalanced-learn**: Balanced Random Forest
 
 ## Quick Start
 
-1. **Prepare your dataset** (or use the provided example):
+### Complete Pipeline
+
+Run all stages in sequence:
 ```bash
-# Edit config.yml to set your ChEMBL target ID or provide custom data
-# Then run:
-python main.py
+  python main.py
 ```
 
-2. **Run the complete pipeline**:
+This executes:
+1. Dataset preparation (fetches from ChEMBL or uses custom data)
+2. Activity cliffs analysis (optional, configurable)
+3. Reverse QSAR fragment mining (CAFE)
+4. QSAR model evaluation (cliff-aware metrics)
+5. Molecular generation (CAFE LATE)
+
+### Step-by-Step Execution
+
+**1. Prepare dataset only:**
 ```bash
-python main.py
+  # Set REBUILD_DATASET: true in config.yml, then:
+  python main.py
+  # Pipeline stops after dataset creation
 ```
 
-The pipeline will:
-1. Fetch and prepare the dataset (if needed)
-2. Detect activity cliffs (optional)
-3. Extract AC-enriched fragments via Reverse QSAR
-4. Evaluate QSAR models with activity cliff awareness
-5. Generate novel molecules using AC-enriched fragments
+**2. Run remaining stages:**
+```bash
+  # Set REBUILD_DATASET: false, enable desired stages in config.yml:
+  python main.py
+```
+
+The pipeline automatically skips completed stages (resume functionality).
 
 ## Pipeline Overview
 
@@ -95,55 +87,56 @@ The pipeline consists of five main stages:
 
 ### 1. Dataset preparation (`data_preparation.py`)
 
-- **Input**: ChEMBL target ID or custom CSV files
+- **Input**: ChEMBL target ID (`TARGET_ID` in config) or custom CSV with columns: `ChEMBL_ID`, `canonical_smiles`, `pIC50` (or `IC50_nM`)
 - **Process**:
-  - Fetches data from ChEMBL API
-  - Merges with chemical space metadata
-  - Cleans and standardizes compounds (MW < 900, LogP < 8)
-  - Normalizes activity values to nM
-  - Removes tautomer duplicates
-- **Output**: `data/processed/final_dataset.csv`
+  - Fetches activity data from ChEMBL API (if `TARGET_ID` provided)
+  - Merges with chemical space metadata (optional)
+  - Standardizes SMILES (RDKit canonicalization, tautomer removal)
+  - Filters: MW < 900 Da, LogP < 8
+  - Converts activities to pIC50 and binary labels (threshold: `THRESHOLD_NM` in config)
+- **Output**: `data/processed/final_dataset.csv` (required for all downstream stages)
+- **Standalone**: Set `REBUILD_DATASET: true` in config, run `python main.py` (stops after dataset creation)
 
 ### 2. Activity cliffs analysis (`AC_analysis/ac_analysis.py`)
 
-- **Purpose**: Detect and visualize activity cliffs
-- **Definition**: Pairs of molecules with:
-  - Tanimoto similarity ≥ threshold (typically 0.8)
-  - Potency difference ≥ threshold (typically 1.0 log units, i.e., 10-fold)
-- **Output**: Activity cliff pairs, SALI scatterplot, t-SNE visualization
-- **Usage**: Optional (can be skipped if cliffs are pre-computed)
+- **Purpose**: Identify structurally similar molecule pairs with large activity differences
+- **Definition**: Activity cliff = Tanimoto similarity ≥ 0.8 (ECFP4) AND |ΔpIC50| ≥ 1.0 log unit
+- **Metrics**: SALI (Structure-Activity Landscape Index) quantifies cliff severity
+- **Output**: `results/AC_analysis/activity_cliffs.csv`, SALI scatterplot, PCA/t-SNE visualizations
+- **Usage**: Optional (enable via `AC_Analysis.enable: true` in config)
 
-### 3. Reverse QSAR (`reverse_qsar/defragmentation.py`)
+### 3. Reverse QSAR – CAFE (`reverse_qsar/defragmentation.py`)
 
-- **Purpose**: Extract activity cliff-enriched molecular fragments
+- **Purpose**: Extract fragments enriched in activity cliffs (CAFE: Cliff-Aware Fragment Extraction)
 - **Methodology**:
-  - BRICS fragmentation of molecules
-  - Multi-model evaluation (9 ML algorithms)
-  - SHAP-based feature importance
-  - AC enrichment analysis
-- **Output**: Selected fragments with AC flags (`results/reverse_QSAR/`)
-- **Key Feature**: Fragments selected for their contribution to activity cliffs
+  - BRICS fragmentation → binary fragment-molecule matrix
+  - Train 9 ML models (LogReg, KNN, SVC, RF, BRF, ExtraTrees, GB, XGB, CatBoost) on fragment presence vs. activity
+  - Rank models by AUPRC₍active₎ with bootstrap CIs
+  - SHAP importance → AC enrichment: fragments appearing only in active cliff members get up-weighted
+- **Output**: `results/reverse_QSAR/*/selected_fragments_with_ACflag.csv` (fragments + AC enrichment flags)
+- **Key Feature**: Fragments driving activity jumps are prioritized for generation
 
 ### 4. Predictive modeling (`predictive_model/cliffaware_qsar.py`)
 
-- **Purpose**: Build and evaluate QSAR models with activity cliff awareness
+- **Purpose**: Train QSAR models with explicit activity cliff awareness
 - **Features**:
-  - Multiple molecular representations (ECFP, MACCS, descriptors)
-  - Group-based data splitting (prevents leakage)
-  - Activity cliff-aware metrics (Cliff_RMSE as primary metric)
-  - Comprehensive validation (bootstrap, y-scrambling, CV)
-- **Output**: Trained models, metrics, visualizations (`results/predictive_model/`)
-- **Model Selection**: Models ranked by Cliff_RMSE (lower is better)
+  - Multiple backbones: ECFP1024/2048, MACCS keys, RDKit/Mordred descriptors
+  - Group-based splitting: `cliff_group` (keeps cliff-connected molecules together) or `Butina` clustering
+  - Primary metric: **Cliff_RMSE** (RMSE computed only on molecules involved in activity cliffs)
+  - Validation: Bootstrap CIs, y-scrambling, repeated CV
+  - Feature selection: Boruta (optimized for small datasets ~350 compounds)
+- **Output**: Best model per backbone (`best_model.joblib`), metrics, SHAP plots, permutation importance
+- **Model Selection**: Ranked by Cliff_RMSE (minimize) → best overall model saved as `best_overall_model.joblib`
 
-### 5. Molecular generation (`generator/`)
+### 5. Molecular generation – CAFE LATE (`generator/`)
 
-- **Purpose**: Generate novel molecules using AC-enriched fragments
+- **Purpose**: Generate novel molecules using AC-enriched fragments with late-stage QSAR correction
 - **Methodology**:
-  - Island Algorithm: Systematic exploration of core scaffolds
-  - Multi-objective scoring: QSAR (activity) + SA (synthetic accessibility) + QED (drug-likeness)
-  - Pareto front optimization
-  - Diversity selection (Butina clustering)
-- **Output**: Candidate molecules (`results/generation/hits.csv`)
+  - **Island Algorithm**: Systematic exploration of user-defined core scaffolds with balanced fragment coverage
+  - **Multi-objective scoring**: QSAR (activity prediction) + SA (synthetic accessibility, lower is better) + QED (drug-likeness)
+  - **CAFE LATE**: Molecules containing AC-enriched fragments get QSAR probability boost (configurable weight)
+  - **Selection**: Pareto front optimization → aggregate score ranking → diversity filtering (Butina clustering or maxmin greedy)
+- **Output**: `results/generation/hits.csv` (diverse candidate molecules with scores and AC fragment flags)
 
 ## Configuration
 
@@ -188,195 +181,68 @@ Generator:
     qed_weight: 0.2             # Weight for drug-likeness
 ```
 
-### File Paths
-```yaml
-Paths:
-  dataset: "data/processed/final_dataset.csv"
-  results_root: "results/predictive_model"
-  fragments: "results/reverse_QSAR"
-  ac_analysis: "results/AC_analysis"
-```
-
-**See `config.yml` for complete configuration options and detailed descriptions.**
-
 ## Usage
 
-### Basic Usage
+### Complete Pipeline
 
-Run the complete pipeline:
+Run all enabled stages:
 ```bash
-python main.py
+  python main.py
 ```
 
 ### Step-by-Step Execution
 
-Each stage can be enabled/disabled via `config.yml`:
+**1. Prepare dataset first:**
+```bash
+  # In config.yml:
+  REBUILD_DATASET: true
+  AC_Analysis.enable: false
+  ReverseQSAR.enable: false
+  QSAR_Eval.enable: false
+  Generator.enable: false
 
-1. **Dataset Preparation**: Set `REBUILD_DATASET: true` to force rebuild
-2. **Activity Cliffs Analysis**: Set `AC_Analysis.enable: true`
-3. **Reverse QSAR**: Set `ReverseQSAR.enable: true`
-4. **Predictive Modeling**: Set `QSAR_Eval.enable: true`
-5. **Molecular Generation**: Set `Generator.enable: true`
+python main.py  # Stops after dataset creation
+```
+
+**2. Run remaining stages:**
+```bash
+  # In config.yml:
+  REBUILD_DATASET: false
+  AC_Analysis.enable: true
+  ReverseQSAR.enable: true
+  QSAR_Eval.enable: true
+  Generator.enable: true
+
+  
+ python main.py  # Skips dataset, runs enabled stages
+```
 
 ### Resume Functionality
 
-The pipeline supports resume functionality to avoid recomputing existing results:
-
+Pipeline automatically skips completed stages. To force recomputation:
 ```yaml
 QSAR_Eval:
   resume:
-    enable: true      # Skip existing artifacts, only recompute missing ones
-    overwrite: false  # Set to true to force recomputation
+    enable: false     # Force recomputation
+    overwrite: true    # Overwrite existing models
 ```
 
-### Using with Your Own Data
+### Using Your Own Dataset
 
-1. **Prepare your dataset CSV** with columns:
+1. **Prepare CSV** with columns:
    - `ChEMBL_ID` (or `ID`)
    - `canonical_smiles`
-   - `pIC50` (or provide `IC50_nM` for conversion)
-   - `activity_flag` (optional, will be computed from threshold)
+   - `pIC50` (or `IC50_nM` for automatic conversion)
+   - `activity_flag` (optional, computed from `THRESHOLD_NM`)
 
 2. **Update `config.yml`**:
-   - Set `Paths.dataset` to your dataset path
-   - Disable ChEMBL fetching: Set `REBUILD_DATASET: false`
-   - Adjust thresholds as needed
+   ```yaml
+   Paths:
+     dataset: "path/to/your/dataset.csv"
+   REBUILD_DATASET: false  # Use existing dataset
+   ```
 
-3. **Run the pipeline**:
-```bash
-python main.py
-```
 
-## Methodology
-
-### Activity Cliff Definition
-
-Activity cliffs are defined as pairs of structurally similar molecules (high Tanimoto similarity) that exhibit significantly different potency:
-
-- **Similarity threshold**: Tanimoto similarity ≥ 0.8 (ECFP4 fingerprints)
-- **Potency difference**: |ΔpIC50| ≥ 1.0 log unit (10-fold difference)
-
-### Data Splitting Strategy
-
-The pipeline uses **group-based splitting** to prevent data leakage:
-
-- **Cliff-group mode**: Molecules connected by activity cliff edges stay in the same split
-- **Butina mode**: Molecules clustered by structural similarity (scaffold fingerprints)
-
-This ensures that structurally similar compounds (including activity cliffs) remain together, preventing information leakage between train and test sets.
-
-### Model Evaluation
-
-Models are evaluated using activity cliff-aware metrics:
-
-- **Cliff_RMSE** (primary metric): RMSE computed only on molecules involved in activity cliffs
-  - Lower Cliff_RMSE indicates better prediction of activity cliffs
-  - Models are ranked by Cliff_RMSE (minimize)
-  
-- **Standard metrics**: AUROC, AUPRC_active, F1, MCC, Accuracy, Brier score, ECE
-
-- **Validation**: Bootstrap confidence intervals, y-scrambling, repeated cross-validation
-
-### Feature Engineering
-
-**Fingerprints**:
-- ECFP1024/2048: Extended Connectivity Fingerprints (radius=2, ECFP4)
-- MACCS: 166 structural keys
-
-**Descriptors**:
-- RDKit 2D descriptors (~200 descriptors)
-- Mordred 2D descriptors (if available)
-- Boruta feature selection (optimized for small datasets)
-
-### Reverse QSAR
-
-1. **BRICS Fragmentation**: Breaks molecules into chemically meaningful fragments
-2. **Multi-Model Training**: 9 ML algorithms evaluated
-3. **SHAP Analysis**: Computes feature importance for fragments
-4. **AC Enrichment**: Identifies fragments enriched in activity cliffs
-5. **Fragment Selection**: Selects fragments until cumulative importance reaches threshold
-
-### Molecular Generation
-
-1. **Island Algorithm**: Systematic exploration of core scaffolds
-   - Ensures balanced coverage of all fragments and cores
-   - Adaptive (bandit) sampling for exploration-exploitation balance
-
-2. **Multi-Objective Scoring**:
-   - **QSAR**: Activity prediction from best model
-   - **SA**: Synthetic accessibility (lower is better)
-   - **QED**: Drug-likeness score
-
-3. **Selection Strategy**:
-   - Pareto front optimization
-   - Ranking by aggregate score
-   - Diversity selection (Butina clustering or maxmin greedy)
-
-## Output
-
-### Predictive Modeling Outputs
-
-Located in `results/predictive_model/`:
-
-- **Per-backbone subdirectories** (`ecfp1024/`, `ecfp2048/`, `maccs/`, `descriptors/`):
-  - Trained models (`.joblib`)
-  - Metrics (`.json`, `.csv`)
-  - Visualizations (ROC, PR, confusion matrix, probability histograms)
-  - SHAP plots (bar, beeswarm)
-  - Permutation importance results
-  
-- **Global outputs**:
-  - `best_overall_model.joblib`: Best model across all backbones
-  - `all_backbones_metrics.csv`: Comparison across all backbones
-  - `backbone_comparison_RMSEcliff.png`: Visualization of backbone performance
-
-### Reverse QSAR Outputs
-
-Located in `results/reverse_QSAR/`:
-
-- `model_comparison.png`: Model performance comparison
-- `model_metrics.csv`: Detailed metrics per model
-- `reinvent_fragments_all.csv`: All AC-enriched fragments
-- Per-model subdirectories:
-  - `selected_fragments_with_ACflag.csv`: Selected fragments with AC enrichment flags
-  - `ac_enrichment.csv`: AC enrichment analysis
-  - `plots/`: SHAP visualizations
-
-### Molecular Generation Outputs
-
-Located in `results/generation/`:
-
-- `hits.csv`: Final diverse set of candidate molecules
-  - Columns: SMILES, core, fragments (AC-flagged), qsar, qed, sa, aggregate_score
-- `generation_summary.json`: Generation statistics
-- `post_score.csv`: All scored molecules (optional)
-
-### Activity Cliffs Analysis Outputs
-
-Located in `results/AC_analysis/`:
-
-- `activity_cliffs.csv`: Detected activity cliff pairs
-- `sali_scatter.png`: SALI scatterplot visualization
-- `tsne_cliffs.png`: t-SNE embedding with cliff highlighting
-
-## Reproducibility
-
-The pipeline is designed for full reproducibility:
-
-1. **Random seeds**: All random operations use configurable seeds (default: 42)
-2. **Deterministic algorithms**: Deterministic implementations where possible
-3. **Configuration-driven**: All parameters controlled via `config.yml`
-4. **Version tracking**: Environment locked via `environment.yaml`
-
-To reproduce results:
-```bash
-# Use exact same environment
-conda env create -f environment.yaml
-conda activate ac-aware-modeling
-
-# Use same config.yml (ensure all seeds match)
-python main.py
-```
 
 ## Adaptability
 
@@ -412,35 +278,10 @@ If you use this pipeline in your research, please cite:
 }
 ```
 
-### Key References
-
-- **Activity Cliffs**: Stumpfe, D., & Bajorath, J. (2011). Exploring activity cliffs in medicinal chemistry. *Journal of Medicinal Chemistry*, 54(1), 26-47.
-- **Boruta Feature Selection**: Kursa, M. B., & Rudnicki, W. R. (2010). Feature selection with the Boruta package. *Journal of Statistical Software*, 36(11), 1-13.
-- **Group-Based Splitting**: Sheridan, R. P. (2013). Time-split based validation as a practical approach to QSAR model validation. *Journal of Chemical Information and Modeling*, 53(4), 783-790.
-- **SHAP Explanations**: Lundberg, S. M., & Lee, S. I. (2017). A unified approach to interpreting model predictions. *NIPS*, 30, 4765-4774.
 
 ## License
 
 MIT License - see LICENSE file for details.
 
-## Authors
 
-- **Tomasz Szostek** - Medical University of Warsaw
-- AC-Aware Modeling Team
-
-## Acknowledgments
-
-- RDKit community for cheminformatics tools
-- ChEMBL database for compound data
-- Contributors to scikit-learn, SHAP, and other open-source libraries
-
-## Contact
-
-For questions, issues, or contributions, please open an issue on GitHub.
-
----
-
-**Version**: 3.0  
-**Last Updated**: 2024  
-**Status**: Production-ready for publication
 
