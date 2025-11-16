@@ -1,0 +1,6 @@
+fragment_smiles,ac_enrichment,n_cliff_pairs,importance,fragment_id
+[*]CC[*],44.656168,4,0.031739,frag_7
+[*]c1ccc(C#N)cc1,27.540893,4,0.005578,frag_21
+[*]N1CCN(C)CC1,14.838942,2,0.001901,frag_25
+[*]c1ccc(Br)cc1,14.062329,8,0.025768,frag_16
+[*]c1ccc(O)cc1,8.339461,1,0.000378,frag_24

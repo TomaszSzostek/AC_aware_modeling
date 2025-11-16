@@ -1,0 +1,16 @@
+# Best overall model (QSAR Evaluation)
+Backbone: maccs
+Engine:   BRF
+
+# Model selection: Composite score balancing mean performance and stability
+Composite score: 0.584
+  = Cliff_RMSE (0.421)
+  + stability_weight (1.0) × CI_width (0.163)
+CI: [0.324, 0.487]
+
+# Performance metrics
+AUROC:    0.880
+AUPRC:    0.831
+Brier:    0.148
+ECE:      0.184
+Threshold:0.511

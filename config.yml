@@ -1,0 +1,423 @@
+# ============================================================================
+# AC-Aware Molecular Modeling Pipeline Configuration
+# ============================================================================
+# 
+# This configuration file controls the complete activity cliff-aware QSAR
+# modeling and fragment-based molecular generation pipeline.
+#
+# Pipeline Overview:
+#   1. Dataset Preparation: Fetch and clean molecular data from ChEMBL
+#   2. Activity Cliffs Analysis: Detect and analyze activity cliffs (optional)
+#   3. Reverse QSAR: Extract activity cliff-enriched fragments using ML models
+#   4. Predictive Modeling: Evaluate QSAR models with activity cliff awareness
+#   5. Molecular Generation: Generate novel molecules using AC-enriched fragments
+#
+# All paths are relative to the project root directory.
+#
+# Author: AC-Aware Modeling Team
+# Version: 3.0
+# License: MIT License
+# ============================================================================
+
+# ============================================================================
+# 1. DATASET CONFIGURATION
+# ============================================================================
+# Controls data fetching from ChEMBL and dataset preparation
+# ============================================================================
+
+# ChEMBL data fetching
+REBUILD_DATASET: false          # Force rebuild dataset from raw sources (true) or reuse cached (false)
+TARGET_ID: "CHEMBL392"         # ChEMBL target ID for data fetching (informational)
+PAGE_LIMIT: 1000                # Maximum records per API page request
+
+# Activity threshold for binary classification
+THRESHOLD_NM: 10000             # Activity threshold in nM; compounds with IC50 <= THRESHOLD_NM are labeled "active"
+
+# Main dataset path (created by dataset preparation pipeline)
+dataset: "data/processed/final_dataset.csv"
+
+
+# ============================================================================
+# 2. CHEMINFORMATICS PARAMETERS
+# ============================================================================
+# Global parameters used across the pipeline for activity cliff detection,
+# feature selection, and molecular similarity calculations
+# ============================================================================
+
+Cheminformatics:
+  default_top_k: 128            # Optimal number of features for datasets ~350 compounds
+  correlation_threshold: 0.95   # Threshold for removing highly correlated features (descriptor backbone)
+  similarity_threshold: 0.80     # Tanimoto similarity threshold for activity cliff definition (ECFP4 fingerprints)
+  potency_diff_threshold: 1.0    # Minimum potency difference in log units (pIC50) for activity cliff definition
+  random_state: 42               # Global random seed for reproducibility
+
+
+# ============================================================================
+# 3. ACTIVITY CLIFFS ANALYSIS
+# ============================================================================
+# Optional upstream analysis for detecting and visualizing activity cliffs
+# Results are used by predictive modeling for cliff-aware evaluation
+# ============================================================================
+
+AC_Analysis:
+  enable: false                  # Enable activity cliffs analysis (set to true to run AC detection)
+  smiles_col: canonical_smiles  # Column name containing SMILES strings
+  potency_col: pIC50             # Column name containing potency values (pIC50)
+  results_dir: results/AC_analysis
+  
+  similarity_threshold: 0.80     # Tanimoto similarity threshold (overrides Cheminformatics if set)
+  potency_diff: 1.0             # Potency difference threshold in log units (overrides Cheminformatics if set)
+  
+  # Visualization options
+  embedding: tsne                # Dimensionality reduction method: "tsne" or "umap"
+  tsne:
+    perplexity: 30               # t-SNE perplexity parameter (typically 5-50)
+  umap:                          # UMAP parameters (if embedding=umap)
+    n_neighbors: 15
+    min_dist: 0.1
+
+
+# ============================================================================
+# 4. REVERSE QSAR CONFIGURATION
+# ============================================================================
+# Reverse QSAR extracts activity cliff-enriched molecular fragments for use
+# in molecular generation. Uses multiple ML models to identify fragments that
+# contribute to activity cliffs.
+#
+# Methodology:
+#   - BRICS fragmentation: Breaks molecules into chemically meaningful fragments
+#   - Multi-model evaluation: Tests 9 ML algorithms to select best fragment predictor
+#   - SHAP-based selection: Uses SHAP importance to select AC-enriched fragments
+#   - AC enrichment analysis: Prioritizes fragments associated with activity cliffs
+# ============================================================================
+
+ReverseQSAR:
+  enable: true                   # Enable reverse QSAR pipeline
+  force_rerun: false             # Force recomputation even if results exist
+  n_repeats: 10                  # Number of independent runs per model for uncertainty estimation (publication quality)
+  
+  # Threshold optimization
+  threshold_metric: "F1"         # Metric for threshold optimization: "F1", "Recall", "Precision", "MCC", "Youden"
+                                 # F1: Balance precision and recall (default)
+                                 # Youden: Balances sensitivity + specificity
+                                 # Recall: Maximize sensitivity (may have too many false positives)
+  
+  # Fragment generation
+  min_occ: 1                     # Minimum fragment occurrence for BRICS fragments to be considered
+  
+  # Machine learning models for fragment prediction
+  engines:
+    - "LogReg"                   # Logistic Regression
+    - "KNN"                      # k-Nearest Neighbors
+    - "SVC"                      # Support Vector Classifier
+    - "RF"                       # Random Forest
+    - "BRF"                      # Balanced Random Forest
+    - "ExtraTrees"               # Extra Trees
+    - "GB"                       # Gradient Boosting
+    - "XGB"                      # XGBoost
+    - "CatBoost"                 # CatBoost
+  
+  # Model selection
+  primary_metric: "AUPRC_active" # Primary metric for model selection (best for imbalanced data)
+                                # Alternatives: "AUROC", "F1", "Accuracy", "Recall", "Precision"
+  
+  # Data splitting
+  split:
+    mode: "cliff_train_max"      # Split mode: "standard", "cliff_group", or "cliff_train_max"
+                                # - cliff_train_max: RECOMMENDED - Assigns ALL activity cliff molecules to TRAIN
+                                #                    Test set contains only non-cliff molecules (clean generalization test)
+                                #                    Maximizes AC information for fragment extraction
+                                # - standard: Random stratified split (may split cliff pairs between train/test)
+                                # - cliff_group: Keeps cliff groups together (but may assign groups to test)
+    test_size: 0.20              # Fraction of data reserved for testing (not used for training)
+    random_state: 42             # Random seed for split reproducibility
+  
+  # Activity cliff enrichment analysis
+  ac_enrichment_auto:
+    enable: true                 # Enable AC enrichment scoring for fragments
+    sali_clip_percentile: 99.0   # SALI percentile for clipping extreme values (stability)
+  
+  # Fragment selection
+  selection:
+    # Automatic threshold selection mode (methodologically rigorous)
+    threshold_mode: "knee"        # Options: "knee", "stability", "fdr_null", "cumulative"
+                                  # - knee: RECOMMENDED - Automatic elbow detection (no arbitrary params)
+                                  # - stability: Bootstrap-based robustness (conservative)
+                                  # - fdr_null: FDR-controlled with permutation null (most rigorous)
+                                  # - cumulative: Manual threshold (requires justification)
+    
+    # Stability validation (applied to selected fragments for all modes)
+    report_stability: true        # Report selection stability for chosen fragments (bootstrap-based)
+    stability_n_bootstrap: 100    # Number of bootstrap samples for stability validation
+    
+    # Mode-specific parameters
+    cumsum_active_threshold: 0.8  # For cumulative mode: cumulative importance threshold
+    importance_threshold: 0.0     # Minimum importance filter (applied before threshold selection)
+    
+    # Advanced parameters
+    min_fragments: 15             # Minimum number of fragments to select (prevents too conservative selection)
+    stability_threshold: 0.8      # For stability mode: fragments selected in ≥80% of bootstrap samples
+    fdr_level: 0.05               # For fdr_null mode: False Discovery Rate control level
+    n_bootstrap: 100              # Number of bootstrap/permutation samples
+
+
+# ============================================================================
+# 5. PREDICTIVE MODELING (QSAR EVALUATION)
+# ============================================================================
+# Comprehensive QSAR model evaluation with activity cliff awareness.
+#
+# Key Features:
+#   - Multi-backbone feature engineering: ECFP fingerprints, MACCS keys, RDKit/Mordred descriptors
+#   - Group-based data splitting: Prevents data leakage by keeping activity cliff groups together
+#   - Activity cliff-aware metrics: Cliff_RMSE (primary metric) evaluates model performance on activity cliffs
+#   - Comprehensive validation: Bootstrap confidence intervals, y-scrambling, cross-validation
+#
+# Methodology:
+#   - Feature backbones: Multiple molecular representations (fingerprints, descriptors)
+#   - Model selection: Ranked by Cliff_RMSE (RMSE on activity cliff nodes in test set)
+#   - Group splitting: Prevents leakage by ensuring cliff-connected molecules stay in same split
+# ============================================================================
+
+QSAR_Eval:
+  enable: true                  # Enable QSAR evaluation pipeline
+  force_rerun: false             # Force recomputation of all results
+  rebuild_features: false        # Force rebuild of feature matrices (ignore cached features)
+  n_repeats: 10                  # Number of independent runs per model for uncertainty estimation (publication quality)
+  
+  # Model selection strategy
+  primary_metric: Cliff_RMSE     # Primary metric for model ranking
+  stability_weight: 1.0          # Weight (α) for stability penalty in composite score
+                                # Score = Mean + (α × CI_width)
+                                # α = 0.5: Prioritize mean performance
+                                # α = 1.0: Balanced (equal weights for mean and stability)
+                                # α = 2.0: Prioritize stability
+  
+  # Resume functionality (enables incremental computation)
+  resume:
+    enable: true                 # Enable resume: skip existing artifacts, only recompute missing ones
+    overwrite: false             # If true, overwrite existing artifacts instead of skipping
+  
+  # Data splitting (prevents data leakage)
+  split:
+    mode: cliff_group            # Split mode: "butina" (scaffold clustering) or "cliff_group" (AC groups)
+                                # - butina: Groups molecules by structural similarity (Tanimoto threshold)
+                                # - cliff_group: Groups molecules connected by activity cliff edges
+    test_size: 0.20              # Fraction of data for testing
+    random_state: 42             # Random seed for reproducibility
+    sphere_tanimoto: 0.7         # Tanimoto threshold for Butina clustering (only used if mode=butina)
+  
+  # Feature backbones (molecular representations)
+  backbones:
+    - "ecfp1024"                 # Extended Connectivity Fingerprints (ECFP4) 1024 bits
+    - "ecfp2048"                 # Extended Connectivity Fingerprints (ECFP4) 2048 bits
+    - "maccs"                    # MACCS structural keys (166 bits)
+    - "descriptors"              # RDKit 2D descriptors + Mordred 2D descriptors (with Boruta selection)
+  
+  # Machine learning models
+  engines:
+    - "LogReg"                   # Logistic Regression
+    - "KNN"                      # k-Nearest Neighbors
+    - "SVC"                      # Support Vector Classifier (RBF kernel)
+    - "RF"                       # Random Forest
+    - "ExtraTrees"               # Extra Trees
+    - "GB"                       # Gradient Boosting
+    - "XGB"                      # XGBoost
+    - "CatBoost"                 # CatBoost
+    - "BRF"                      # Balanced Random Forest
+  
+  # Model hyperparameters
+  svc_C: 3.0                     # SVC regularization parameter (C)
+  linear_svm_C: 1.0             # LinearSVC regularization parameter (not currently used)
+  knn_k: 15                      # Number of neighbors for KNN
+  
+  # Threshold optimization
+  threshold_opt:
+    enable: true                 # Enable decision threshold optimization on validation set
+    metric: "MCC"                # Metric to optimize: "MCC" (recommended), "F1", "YOUDEN", "ACC"
+    val_size: 0.20               # Validation set size (fraction) for threshold search
+    random_state: 42             # Random seed for validation split
+  
+  # Model selection
+
+                                # Cliff_RMSE: RMSE computed only on molecules involved in activity cliffs
+  
+  # Post-hoc analyses (computed on TEST set)
+  permutation_importance:
+    enable: true                 # Enable permutation importance analysis
+    n_repeats: 10                # Number of permutation repeats
+    top_n: 30                    # Number of top features to report
+  
+  # SHAP explanations (model interpretability)
+  shap:
+    background_size: 200         # Size of background dataset for SHAP
+    sample_size: 300             # Number of test samples to explain
+    permutation_max_evals_multiplier: 2.2  # Multiplier for SHAP permutation method
+    max_display_features: 30     # Maximum number of features to display on SHAP plots (top 30 most important)
+    silent: true                 # Suppress SHAP progress output
+  
+  # Statistical validation (sanity checks)
+  extras:
+    enable: true                 # Enable bootstrap/y-scramble/cross-validation validation
+    bootstrap_n: 1000            # Number of bootstrap samples for AUROC confidence intervals
+    yscramble_n: 30              # Number of y-scrambling permutations (sanity check)
+    cv_splits: 5                 # Number of CV folds
+    cv_repeats: 10               # Number of CV repeats
+
+
+# ============================================================================
+# 6. FILE PATHS CONFIGURATION
+# ============================================================================
+# All input and output paths used throughout the pipeline
+# ============================================================================
+
+Paths:
+  # Input data paths
+  target_path: "data/all_target_compounds/A549_activities.csv"      # Raw ChEMBL data (auto-fetched)
+  chemical_space_path: "data/chemical_space/specific_compounds.csv" # Chemical space metadata
+  own_resources_path: "data/own_recorces_compounds/my_compounds.csv"  # Custom compounds (optional)
+  merged_path: "data/merged/merged.csv"                            # Merged dataset (intermediate)
+  dataset: "data/processed/final_dataset.csv"                      # Final processed dataset
+  
+  # Output directories
+  results_root: "results/predictive_model"                         # QSAR evaluation results
+  fragments: "results/reverse_QSAR"                                 # Reverse QSAR results (fragments)
+  ac_analysis: "results/AC_analysis"                               # Activity cliffs analysis results
+
+
+# ============================================================================
+# 7. OUTPUT ARTIFACTS CONFIGURATION
+# ============================================================================
+# File names for generated outputs (used by predictive modeling pipeline)
+# All paths are relative to backbone-specific subdirectories
+# ============================================================================
+
+Artifacts:
+  # Feature matrices
+  X_full: "X_full.pkl"                    # Full feature matrix and feature names (pickled)
+  
+  # Model files
+  qsar_best_model: "best_model.joblib"     # Best model per backbone (joblib format)
+  qsar_best_model_overall: "best_overall_model.joblib"  # Best model across all backbones
+  
+  # Output directories (relative to backbone subdirectory)
+  per_model_pred_csv_dir: "predictions"          # Per-model prediction CSV files
+  per_model_pi_csv_dir: "permutation_importance" # Permutation importance results
+  extras_dir: "extras"                           # Bootstrap/y-scramble/CV validation results
+
+
+# ============================================================================
+# 8. MOLECULAR GENERATION CONFIGURATION
+# ============================================================================
+# AC-aware molecular generation using fragments enriched in activity cliffs.
+#
+# Pipeline Overview:
+#   1. Generation: Systematically generate molecules around core scaffolds using AC-enriched fragments
+#   2. Scoring: Multi-objective scoring (QSAR activity + SA synthetic accessibility + QED drug-likeness)
+#   3. Selection: Pareto front optimization → Ranking → Diversity selection
+#   4. Output: Final diverse set of candidate molecules (hits.csv)
+#
+# Methodology:
+#   - Island Algorithm: Ensures balanced exploration of all fragments and core scaffolds
+#   - Multi-objective scoring: Combines activity prediction, synthetic feasibility, and drug-likeness
+#   - Diversity selection: Uses Butina clustering or maxmin greedy selection for final set
+# ============================================================================
+
+Generator:
+  enable: true                  # Enable molecular generation pipeline
+  force_rerun: false             # Force recomputation even if results exist
+  
+  # Core SMARTS patterns (scaffolds for molecular generation)
+  # These define the core structures around which fragments are assembled
+  cores:
+    - "[*]C1SC(=O)NC1=O"
+    - "[*]C(=O)NN1C(=O)CSC1[*]"
+    - "[*]C1SC(=O)N([*])C1=O"
+    - "[*]C1SC(=S)N([*])C1=O"
+    - "[*]N1CCCS1(=O)=O"
+  
+  # Fragment library (auto-loaded from Reverse QSAR results)
+  fragment_library: "results/reverse_QSAR/reinvent_fragments_all.csv"
+  
+  # Generation parameters
+  generation:
+    n_samples: 500000            # Target number of molecules to generate
+    batch_size: 5000              # Batch size for generation
+    max_attempts: 500            # Maximum attempts per molecule generation
+    timeout_seconds: 150          # Timeout per molecule generation (seconds)
+    max_mol_weight: 800           # Maximum molecular weight (Da) - allows 6-7 fragments avg
+    min_mol_weight: 150           # Minimum molecular weight (Da) for meaningful fragments
+    
+    # Multiprocessing
+    multiprocessing:
+      enable: false               # Disable multiprocessing for debugging
+      max_cores: 0                # Maximum CPU cores (0 = use all available)
+      scoring_threshold: 1000     # Use multiprocessing for scoring if molecules > threshold
+    
+    # Deduplication
+    deduplication:
+      enable: true                # Enable deduplication at generation level
+      global_dedup: true          # Global deduplication across all batches
+      fragment_diversity: true    # Enable diverse fragment sampling
+      log_duplicates: false       # Log duplicate molecules (debug only)
+  
+  # Seed assembly (Island Algorithm)
+  # Ensures balanced exploration of fragments and core scaffolds
+  seed_assembly:
+    min_per_fragment: 2500       # Minimum generation attempts per fragment
+    min_per_core: 25000          # Minimum generation attempts per core scaffold
+    bandits:
+      start_after: 0.3           # Start adaptive (bandit) sampling after this fraction
+      entropy_decay: 0.95        # Entropy decay for exploration-exploitation balance
+      reweight_factor: 2.0       # Reweighting factor for adaptive fragment selection
+  
+  # Multi-objective scoring
+  scoring:
+    qsar_model_path: "results/predictive_model/best_overall_model.joblib"  # QSAR model for activity prediction
+    qsar_weight: 0.4             # Weight for QSAR probability in aggregate score (0.0-1.0)
+    
+    sa_weight: 0.4               # Weight for SA (synthetic accessibility) score
+                                # Lower SA = more synthetically accessible (range typically 1-10)
+    sa_max: 10.0                 # Maximum SA value for normalization (clamping)
+    
+    qed_weight: 0.2              # Weight for QED (Quantitative Estimate of Drug-likeness) score
+    qed_floor: 0.1               # Minimum QED threshold (molecules below are filtered out)
+    
+    # CAFE LATE scoring (Late-stage Activity Cliff Fragment Enrichment)
+    # Post-generation scoring adjustment that corrects QSAR predictions for molecules
+    # containing AC-enriched fragments from CAFE analysis
+    # Only rewards fragments with selected_by == "AC_added" (not threshold fragments)
+    enable_cafe_scoring: true    # Enable CAFE LATE adjustment to QSAR scores
+    cafe_weight: 0.4             # Maximum CAFE LATE adjustment weight (0.0-1.0, increased for stronger impact)
+                                # Higher values give more weight to CAFE LATE fragment knowledge
+                                # Lower values trust QSAR more
+    enrichment_threshold: 1.0    # Minimum AC enrichment to consider (filters weak fragments)
+    paths:
+      fragments: "results/reverse_QSAR"  # Path to reverse QSAR results with AC fragment data
+  
+  # Selection and filtering
+  selection:
+    pareto_front:
+      enable: true                # Enable Pareto optimization for multi-objective scoring
+      k_front: 75000              # Keep top K molecules from Pareto front (~15% of 500k)
+    
+    ranking:
+      rank_top_k: 25000           # Select top K molecules by aggregate score
+    
+    diversity:
+      final_k: 100                # Final diverse set size (output to hits.csv - 100 molecules with CAFE LATE)
+      scaffold_balance:
+        per_core_min: 10          # Minimum molecules per core scaffold
+      method: "butina"            # Diversity method: "butina" (clustering) or "maxmin" (greedy)
+      similarity_threshold: 0.7   # Tanimoto similarity threshold for diversity selection
+  
+  # Output configuration
+  output:
+    results_dir: "results/generation"
+    log_interval: 5000            # Log progress every N molecules
+    
+    files:
+      post_score: "post_score.csv"        # Scored molecules before selection (optional)
+      final_dataset: "hits.csv"           # Final selected molecules with scores and metadata
+      summary: "generation_summary.json"   # Generation statistics and metadata
+      fragment_usage: "fragment_usage.csv"  # Fragment usage statistics (optional)
+      core_usage: "core_usage.csv"        # Core scaffold usage statistics (optional)

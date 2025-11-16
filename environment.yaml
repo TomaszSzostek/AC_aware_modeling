@@ -1,0 +1,51 @@
+name: ac-aware-modeling
+channels:
+  - conda-forge          # Primary channel with comprehensive package collection
+  - rdkit                # RDKit channel (redundant with conda-forge, kept for stability)
+  
+dependencies:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Python and Core Cheminformatics
+  # ─────────────────────────────────────────────────────────────────────────
+  - python =3.10         # Python version (compatible with RDKit 2023.09)
+  - rdkit =2023.09.5     # Cheminformatics toolkit (molecular operations, fingerprints)
+  - mordred              # 2D molecular descriptor calculator (complement to RDKit)
+  
+  # ─────────────────────────────────────────────────────────────────────────
+  # Machine Learning and Feature Selection
+  # ─────────────────────────────────────────────────────────────────────────
+  - scikit-learn >=1.4   # Core ML library (models, metrics, feature selection)
+  - imbalanced-learn     # BalancedRandomForest for imbalanced datasets
+  - shap >=0.45          # SHAP values for model interpretability
+  - boruta_py            # Boruta feature selection algorithm
+  - joblib               # Model persistence (save/load trained models)
+  
+  # ─────────────────────────────────────────────────────────────────────────
+  # Data Processing and Analysis
+  # ─────────────────────────────────────────────────────────────────────────
+  - numpy >=1.26         # Numerical computing
+  - pandas >=2.2         # Data manipulation and analysis
+  - networkx              # Graph algorithms (for activity cliff grouping)
+  - requests              # HTTP requests (for ChEMBL API data fetching)
+  - pyyaml                # YAML configuration file parsing
+  
+  # ─────────────────────────────────────────────────────────────────────────
+  # Visualization
+  # ─────────────────────────────────────────────────────────────────────────
+  - matplotlib >=3.8     # Plotting and visualization
+  - seaborn >=0.13       # Statistical visualization
+  - tqdm                 # Progress bars for long-running operations
+  
+  # ─────────────────────────────────────────────────────────────────────────
+  # Optional Extensions (via pip)
+  # ─────────────────────────────────────────────────────────────────────────
+  - pip:
+      # Gradient boosting libraries (optional, install if using XGB/CatBoost models)
+      - xgboost >=2.0     # XGBoost gradient boosting
+      - catboost >=1.2    # CatBoost gradient boosting
+      
+      # Interactive visualization (optional, for notebooks)
+      - py3Dmol>=2.0.2     # 3D molecular viewer in Jupyter notebooks
+      
+      # Additional utilities (if needed)
+      - ipykernel          # Jupyter kernel for interactive development

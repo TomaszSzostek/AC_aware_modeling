@@ -1,0 +1,104 @@
+{
+  "generation_stats": {
+    "generated": 500000,
+    "dropped_floors": 3461,
+    "rejection_reasons": {
+      "floor:qed": 3461
+    },
+    "final_size": 87,
+    "start_time": "2025-11-12T17:26:08.131161",
+    "end_time": null,
+    "pareto_size": 107,
+    "rejection_breakdown": {
+      "scored_molecules": 496539,
+      "pareto_removed": 496432,
+      "ranking_removed": 0,
+      "diversity_removed": 20,
+      "scaffold_removed": 0,
+      "dedup_removed": 0
+    }
+  },
+  "config": {
+    "enable": true,
+    "force_rerun": false,
+    "cores": [
+      "[*]C1SC(=O)NC1=O",
+      "[*]C(=O)NN1C(=O)CSC1[*]",
+      "[*]C1SC(=O)N([*])C1=O",
+      "[*]C1SC(=S)N([*])C1=O",
+      "[*]N1CCCS1(=O)=O"
+    ],
+    "fragment_library": "results/reverse_QSAR/reinvent_fragments_all.csv",
+    "generation": {
+      "n_samples": 500000,
+      "batch_size": 5000,
+      "max_attempts": 500,
+      "timeout_seconds": 150,
+      "max_mol_weight": 800,
+      "min_mol_weight": 150,
+      "multiprocessing": {
+        "enable": false,
+        "max_cores": 0,
+        "scoring_threshold": 1000
+      },
+      "deduplication": {
+        "enable": true,
+        "global_dedup": true,
+        "fragment_diversity": true,
+        "log_duplicates": false
+      }
+    },
+    "seed_assembly": {
+      "min_per_fragment": 2500,
+      "min_per_core": 25000,
+      "bandits": {
+        "start_after": 0.3,
+        "entropy_decay": 0.95,
+        "reweight_factor": 2.0
+      }
+    },
+    "scoring": {
+      "qsar_model_path": "results/predictive_model/best_overall_model.joblib",
+      "qsar_weight": 0.4,
+      "sa_weight": 0.4,
+      "sa_max": 10.0,
+      "qed_weight": 0.2,
+      "qed_floor": 0.1,
+      "enable_cafe_scoring": true,
+      "cafe_weight": 0.4,
+      "enrichment_threshold": 1.0,
+      "paths": {
+        "fragments": "results/reverse_QSAR"
+      }
+    },
+    "selection": {
+      "pareto_front": {
+        "enable": true,
+        "k_front": 75000
+      },
+      "ranking": {
+        "rank_top_k": 25000
+      },
+      "diversity": {
+        "final_k": 100,
+        "scaffold_balance": {
+          "per_core_min": 10
+        },
+        "method": "butina",
+        "similarity_threshold": 0.7
+      }
+    },
+    "output": {
+      "results_dir": "results/generation",
+      "log_interval": 5000,
+      "files": {
+        "post_score": "post_score.csv",
+        "final_dataset": "hits.csv",
+        "summary": "generation_summary.json",
+        "fragment_usage": "fragment_usage.csv",
+        "core_usage": "core_usage.csv"
+      }
+    }
+  },
+  "timestamp": "2025-11-13T10:31:23.357322"
+}
