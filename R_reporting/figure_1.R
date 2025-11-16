@@ -41,11 +41,11 @@ panel_a <- ggplot(plot_data, aes(x = model, y = value, fill = model)) +
   labs(x = NULL, y = "Value") +
   default_theme +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 12, face = "bold"),
-    axis.text.y = element_text(size = 12),
-    axis.title.y = element_text(size = 14, face = "bold"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 16, face = "bold"),
+    axis.text.y = element_text(size = 16),
+    axis.title.y = element_text(size = 18, face = "bold"),
     strip.background = element_blank(),
-    strip.text = element_text(face = "bold", size = 13),
+    strip.text = element_text(face = "bold", size = 17),
     legend.position = "none"
   )
 
@@ -64,18 +64,18 @@ cm_colors <- colorRampPalette(c("#F7FCF5", "#E5F5E0", "#C7E9C0", "#A1D99B", "#74
 
 panel_b <- ggplot(cm_data, aes(x = Predicted, y = True, fill = n)) +
   geom_tile(color = "white", linewidth = 2) +
-  geom_text(aes(label = n), size = 7, fontface = "bold", color = "#2B2B2B") +
+  geom_text(aes(label = n), size = 10, fontface = "bold", color = "#2B2B2B") +
   scale_fill_gradientn(colors = cm_colors) +
   labs(x = "Predicted", y = "True", fill = "Count") +
   default_theme +
   theme(
-    axis.text.x = element_text(size = 11, face = "bold"),
-    axis.text.y = element_text(size = 11, face = "bold"),
-    axis.title.x = element_text(size = 12, face = "bold"),
-    axis.title.y = element_text(size = 12, face = "bold"),
+    axis.text.x = element_text(size = 16, face = "bold"),
+    axis.text.y = element_text(size = 16, face = "bold"),
+    axis.title.x = element_text(size = 18, face = "bold"),
+    axis.title.y = element_text(size = 18, face = "bold"),
     legend.position = "right",
-    legend.title = element_text(size = 10, face = "bold"),
-    legend.text = element_text(size = 9),
+    legend.title = element_text(size = 16, face = "bold"),
+    legend.text = element_text(size = 14),
     legend.key.height = unit(0.7, "cm"),
     legend.key.width = unit(0.35, "cm"),
     plot.margin = margin(5, 30, 5, 5)
@@ -113,24 +113,24 @@ panel_c <- ggplot(frag_plot_data, aes(x = rank, y = importance, color = status, 
   labs(x = "Fragment Rank", y = "Importance Score") +
   default_theme +
   theme(
-    axis.text.x = element_text(size = 13),
-    axis.text.y = element_text(size = 13),
-    axis.title.x = element_text(size = 15, face = "bold"),
-    axis.title.y = element_text(size = 15, face = "bold"),
+    axis.text.x = element_text(size = 17),
+    axis.text.y = element_text(size = 17),
+    axis.title.x = element_text(size = 19, face = "bold"),
+    axis.title.y = element_text(size = 19, face = "bold"),
     legend.position = c(0.83, 0.78),
     legend.background = element_rect(fill = "white", color = "black", linewidth = 0.6),
-    legend.title = element_text(size = 14, face = "bold"),
-    legend.text = element_text(size = 13),
+    legend.title = element_text(size = 18, face = "bold"),
+    legend.text = element_text(size = 16),
     legend.key.size = unit(1, "cm")
   )
 
 # Combine panels
 top_row <- plot_grid(panel_a, panel_b, ncol = 2, labels = c("A", "B"), 
-                     label_size = 16, label_fontface = "bold", 
+                     label_size = 22, label_fontface = "bold", 
                      rel_widths = c(1.4, 1), label_x = c(0, 0.08))
 
 final_fig <- plot_grid(top_row, panel_c, ncol = 1, labels = c("", "C"),
-                       label_size = 16, label_fontface = "bold", rel_heights = c(1, 0.85))
+                       label_size = 22, label_fontface = "bold", rel_heights = c(1, 0.85))
 
 # Save
 dir.create("R_reporting/figures", showWarnings = FALSE, recursive = TRUE)
