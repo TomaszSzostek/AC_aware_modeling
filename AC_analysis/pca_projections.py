@@ -2,17 +2,17 @@
 PCA Projections for Chemical Space Visualization
 
 This module provides PCA-based visualization of chemical space using molecular
-fingerprints, colored by pIC50 activity values, with activity cliffs (AC) 
-highlighted as triangles colored according to pIC50 scale.
+fingerprints, colored by activity classes (active/inactive), with activity cliffs (AC) 
+highlighted as triangles.
 
 Key Features:
 - ECFP fingerprint generation for molecular representation
 - PCA dimensionality reduction for 2D visualization
-- Color coding by pIC50 activity values
-- Activity cliff highlighting (triangles colored by pIC50)
+- Color coding by activity classes (active/inactive)
+- Activity cliff highlighting (triangles)
 - Publication-ready visualizations
 
-Results are saved in `results/AC_analysis/pca_projection.png`.
+Results are saved in `results/AC_analysis/pca_projection_(Figure_S2).png`.
 """
 
 import os
@@ -26,7 +26,7 @@ from rdkit.Chem import rdFingerprintGenerator
 from sklearn.decomposition import PCA
 
 # Import AC analysis functions for fingerprint computation
-from ac_analysis import compute_fingerprints
+from AC_analysis.ac_analysis import compute_fingerprints
 
 # ======================================================
 # PCA Projection Visualization
@@ -41,10 +41,11 @@ def create_pca_projection(
     n_components: int = 2,
     radius: int = 2,
     nbits: int = 2048,
-    random_state: int = 42
+    random_state: int = 42,
+    activity_threshold: float = 5.0
 ) -> None:
     """
-    Create PCA projection of chemical space with pIC50 coloring and AC highlighting.
+    Create PCA projection of chemical space with activity class coloring and AC highlighting.
     
     Args:
         df: DataFrame containing molecular data with SMILES and pIC50
@@ -56,8 +57,9 @@ def create_pca_projection(
         radius: Fingerprint radius (default: 2, equivalent to ECFP4)
         nbits: Number of bits in fingerprint (default: 2048)
         random_state: Random seed for reproducibility (default: 42)
+        activity_threshold: pIC50 threshold for active/inactive classification (default: 5.0)
     """
-    print(f"🧪 Computing ECFP fingerprints for {len(df)} molecules...")
+    print(f"Computing ECFP fingerprints for {len(df)} molecules...")
     
     # Compute fingerprints
     fps, mols = compute_fingerprints(df[smiles_col].tolist(), radius=radius, nbits=nbits)
@@ -67,7 +69,7 @@ def create_pca_projection(
     fps_valid = [fps[i] for i in valid_indices]
     df_valid = df.iloc[valid_indices].copy()
     
-    print(f"   ✓ Valid molecules: {len(fps_valid)}")
+    print(f"   Valid molecules: {len(fps_valid)}")
     
     # Convert fingerprints to numpy array
     fps_array = np.array([list(fp.ToBitString()) for fp in fps_valid])
@@ -83,7 +85,7 @@ def create_pca_projection(
     var_explained = pca.explained_variance_ratio_
     total_var = sum(var_explained)
     
-    print(f"   ✓ PCA explained variance: PC1={var_explained[0]:.1%}, PC2={var_explained[1]:.1%}, Total={total_var:.1%}")
+    print(f"   PCA explained variance: PC1={var_explained[0]:.1%}, PC2={var_explained[1]:.1%}, Total={total_var:.1%}")
     
     # Prepare plot data
     df_plot = df_valid.copy()
@@ -95,80 +97,90 @@ def create_pca_projection(
         cliff_mols = set(cliffs_df["mol_i"]).union(set(cliffs_df["mol_j"]))
         df_plot["is_ac"] = df_plot[smiles_col].isin(cliff_mols)
         n_ac = df_plot["is_ac"].sum()
-        print(f"   ✓ Activity cliffs identified: {n_ac} molecules")
+        print(f"   Activity cliffs identified: {n_ac} molecules")
     else:
         df_plot["is_ac"] = False
         n_ac = 0
         print("   No activity cliffs found.")
     
+    # Classify molecules as active/inactive based on pIC50 threshold
+    df_plot["activity_class"] = df_plot[potency_col].apply(
+        lambda x: "Active" if x >= activity_threshold else "Inactive"
+    )
+    
     # Separate AC and non-AC molecules
     non_ac_df = df_plot[~df_plot["is_ac"]]
     ac_df = df_plot[df_plot["is_ac"]]
     
-    # Get pIC50 range for consistent colormap scaling
-    pIC50_min = df_plot[potency_col].min()
-    pIC50_max = df_plot[potency_col].max()
+    # Define pastel colors for activity classes
+    activity_colors = {
+        "Active": "#a5d6a7",    # Pastel green
+        "Inactive": "#ef9a9a"    # Pastel pink/red
+    }
+    ac_color = "#90caf9"  # Pastel blue for AC molecules
     
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 10))
     
-    # Plot all non-AC molecules colored by pIC50 (larger points)
-    scatter_all = None
+    # Plot all non-AC molecules colored by activity class (larger points)
     if len(non_ac_df) > 0:
-        scatter_all = ax.scatter(
-            non_ac_df["PC1"], non_ac_df["PC2"],
-            c=non_ac_df[potency_col],
-            cmap="coolwarm",
-            vmin=pIC50_min,
-            vmax=pIC50_max,
-            alpha=0.6,
-            s=50,  # Slightly larger points
-            edgecolor="none",
-            zorder=1
-        )
+        for activity_class, color in activity_colors.items():
+            class_data = non_ac_df[non_ac_df["activity_class"] == activity_class]
+            if len(class_data) > 0:
+                ax.scatter(
+                    class_data["PC1"], class_data["PC2"],
+                    c=color,
+                    alpha=0.7,
+                    s=120,  # Larger points
+                    edgecolor="white",
+                    linewidths=0.5,
+                    zorder=1,
+                    label=activity_class
+                )
     
-    # Overlay AC molecules as triangles colored by pIC50 (same scale)
-    scatter_ac = None
+    # Overlay AC molecules as triangles in pastel blue (regardless of activity class)
     if len(ac_df) > 0:
-        scatter_ac = ax.scatter(
+        ax.scatter(
             ac_df["PC1"], ac_df["PC2"],
-            c=ac_df[potency_col],
-            cmap="coolwarm",
-            vmin=pIC50_min,
-            vmax=pIC50_max,
+            c=ac_color,
             marker="^",  # Triangle marker
-            s=120,  # Larger triangles
+            s=180,  # Larger triangles
             alpha=0.85,
-            edgecolor="black",
-            linewidths=0.8,
+            edgecolor="white",
+            linewidths=1.2,
             zorder=2,
             label=f"Activity Cliffs (n={n_ac})"
         )
     
-    # Colorbar (use scatter_all or scatter_ac, both have same scale)
-    scatter_for_colorbar = scatter_all if scatter_all is not None else scatter_ac
-    if scatter_for_colorbar is not None:
-        cbar = plt.colorbar(scatter_for_colorbar, ax=ax)
-        cbar.set_label(potency_col, fontsize=14, fontweight="bold")
-        cbar.ax.tick_params(labelsize=12)
+    # Create legend for activity classes
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=activity_colors["Active"], label="Active", edgecolor="white", linewidth=0.5),
+        Patch(facecolor=activity_colors["Inactive"], label="Inactive", edgecolor="white", linewidth=0.5)
+    ]
+    if n_ac > 0:
+        legend_elements.append(plt.Line2D([0], [0], marker='^', color='w', 
+                                         markerfacecolor=ac_color, markersize=12, 
+                                         markeredgecolor='white', markeredgewidth=1.2,
+                                         label=f'Activity Cliffs (n={n_ac})', linestyle='None'))
+    ax.legend(handles=legend_elements, loc="upper right", fontsize=14, framealpha=0.95)
     
-    # Labels (no title as requested)
+    # Labels with larger font
     ax.set_xlabel(
         f"PC1 ({var_explained[0]:.1%} variance explained)",
-        fontsize=14,
+        fontsize=18,
         fontweight="bold"
     )
     ax.set_ylabel(
         f"PC2 ({var_explained[1]:.1%} variance explained)",
-        fontsize=14,
+        fontsize=18,
         fontweight="bold"
     )
     
-    # Legend (only if AC molecules exist)
-    if n_ac > 0:
-        ax.legend(loc="upper right", fontsize=12, framealpha=0.9)
+    # Increase tick label sizes
+    ax.tick_params(axis='both', which='major', labelsize=14)
     
-    # No grid (as requested)
+    # No grid
     ax.grid(False)
     
     # Clean style
@@ -202,35 +214,40 @@ def main():
     dataset_path = Path(config["Paths"]["dataset"])
     ac_results_dir = Path(config["Paths"]["ac_analysis"])
     cliffs_path = ac_results_dir / "activity_cliffs.csv"
-    output_path = ac_results_dir / "pca_projection.png"
+    output_path = ac_results_dir / "pca_projection_(Figure_S2).png"
     
     # AC analysis config
     ac_config = config.get("AC_Analysis", {})
     smiles_col = ac_config.get("smiles_col", "canonical_smiles")
     potency_col = ac_config.get("potency_col", "pIC50")
     
+    # Calculate activity threshold from THRESHOLD_NM
+    threshold_nm = config.get("THRESHOLD_NM", 10000)
+    activity_threshold = -np.log10(threshold_nm * 1e-9)  # Convert nM to pIC50
+    
     print("=" * 70)
     print("PCA Projection of Chemical Space")
     print("=" * 70)
-    print(f"📂 Dataset: {dataset_path}")
-    print(f"📂 Activity cliffs: {cliffs_path}")
-    print(f"📂 Output: {output_path}")
+    print(f"Dataset: {dataset_path}")
+    print(f"Activity cliffs: {cliffs_path}")
+    print(f"Output: {output_path}")
+    print(f"Activity threshold: pIC50 >= {activity_threshold:.2f} (IC50 <= {threshold_nm} nM)")
     print()
     
     # Load dataset
     if not dataset_path.exists():
         raise FileNotFoundError(f"Dataset not found: {dataset_path}")
     
-    print(f"📖 Loading dataset...")
+    print(f"Loading dataset...")
     df = pd.read_csv(dataset_path)
-    print(f"   ✓ Loaded {len(df)} molecules")
+    print(f"   Loaded {len(df)} molecules")
     
     # Load activity cliffs (if available)
     cliffs_df = None
     if cliffs_path.exists():
-        print(f"📖 Loading activity cliffs...")
+        print(f"Loading activity cliffs...")
         cliffs_df = pd.read_csv(cliffs_path)
-        print(f"   ✓ Loaded {len(cliffs_df)} activity cliff pairs")
+        print(f"   Loaded {len(cliffs_df)} activity cliff pairs")
     else:
         print(f"   Activity cliffs file not found: {cliffs_path}")
         print("   Running without AC highlighting.")
@@ -242,7 +259,8 @@ def main():
         potency_col=potency_col,
         cliffs_df=cliffs_df,
         outpath=str(output_path),
-        random_state=config["Cheminformatics"]["random_state"]
+        random_state=config["Cheminformatics"]["random_state"],
+        activity_threshold=activity_threshold
     )
     
     print()

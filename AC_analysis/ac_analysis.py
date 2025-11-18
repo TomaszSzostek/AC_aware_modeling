@@ -17,6 +17,24 @@ from sklearn.manifold import TSNE
 import networkx as nx
 
 # ======================================================
+# Helper functions
+# ======================================================
+
+def format_potency_label(label: str) -> str:
+    """
+    Format potency column label with subscript for pIC50.
+    
+    Args:
+        label: Original column label (e.g., "pIC50")
+        
+    Returns:
+        Formatted label with subscript (e.g., "pIC₅₀")
+    """
+    if label == "pIC50":
+        return "pIC₅₀"
+    return label
+
+# ======================================================
 # Fingerprint generation
 # ======================================================
 
@@ -171,15 +189,18 @@ def plot_sali_scatter(
         label="Cliff pairs"
     )
     cbar = plt.colorbar(scatter)
-    cbar.set_label("SALI", fontsize=12)
+    cbar.set_label("SALI", fontsize=18, fontweight='bold')
+    cbar.ax.tick_params(labelsize=14)
 
     # thresholds
     plt.axvline(x=sim_thr, color="red", linestyle="--", alpha=0.7, label=f"Similarity ≥ {sim_thr}")
     plt.axhline(y=potency_diff, color="blue", linestyle="--", alpha=0.7, label=f"ΔpIC50 ≥ {potency_diff}")
 
-    plt.xlabel("Tanimoto similarity", fontsize=12)
-    plt.ylabel("ΔpIC50 (log units)", fontsize=12)
-    plt.legend(frameon=True, fontsize=10)
+    plt.xlabel("Tanimoto similarity", fontsize=18, fontweight='bold')
+    plt.ylabel("ΔpIC50 (log units)", fontsize=18, fontweight='bold')
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
+    plt.legend(frameon=True, fontsize=14)
     plt.tight_layout()
     plt.savefig(outpath, dpi=300)
     plt.close()
@@ -233,7 +254,9 @@ def plot_tsne(
         cmap="coolwarm",  # pastel-friendly continuous colormap
         alpha=0.6, s=40, edgecolor="none"
     )
-    plt.colorbar(scatter, label=potency_col)
+    cbar = plt.colorbar(scatter)
+    cbar.set_label(format_potency_label(potency_col), fontsize=18, fontweight='bold')
+    cbar.ax.tick_params(labelsize=14)
 
     # overlay cliffs
     cliff_points = df_plot[df_plot["is_cliff"]]
@@ -243,9 +266,11 @@ def plot_tsne(
         label="Cliff molecules"
     )
 
-    plt.legend()
-    plt.xlabel("t-SNE 1", fontsize=12)
-    plt.ylabel("t-SNE 2", fontsize=12)
+    plt.legend(fontsize=14)
+    plt.xlabel("t-SNE 1", fontsize=18, fontweight='bold')
+    plt.ylabel("t-SNE 2", fontsize=18, fontweight='bold')
+    plt.xticks(fontsize=14)
+    plt.yticks(fontsize=14)
     plt.tight_layout()
     plt.savefig(outpath, dpi=300)
     plt.close()
@@ -312,8 +337,8 @@ def plot_combined_ac_figures(
         alpha=0.6, s=40, edgecolor="none"
     )
     cbar_tsne = plt.colorbar(scatter_tsne, ax=ax_tsne)
-    cbar_tsne.set_label(potency_col, fontsize=16)
-    cbar_tsne.ax.tick_params(labelsize=12)
+    cbar_tsne.set_label(format_potency_label(potency_col), fontsize=18, fontweight='bold')
+    cbar_tsne.ax.tick_params(labelsize=14)
     
     # Overlay cliff molecules
     cliff_points = df_plot[df_plot["is_cliff"]]
@@ -323,14 +348,14 @@ def plot_combined_ac_figures(
         label="Cliff molecules", alpha=0.9
     )
     
-    ax_tsne.set_xlabel("t-SNE 1", fontsize=16)
-    ax_tsne.set_ylabel("t-SNE 2", fontsize=16)
-    ax_tsne.tick_params(axis='both', labelsize=12)
-    ax_tsne.legend(fontsize=12, frameon=True, loc='upper right')
+    ax_tsne.set_xlabel("t-SNE 1", fontsize=18, fontweight='bold')
+    ax_tsne.set_ylabel("t-SNE 2", fontsize=18, fontweight='bold')
+    ax_tsne.tick_params(axis='both', labelsize=14)
+    ax_tsne.legend(fontsize=14, frameon=True, loc='upper right')
     ax_tsne.grid(True, alpha=0.2)
     
     # Panel label A (top-left corner)
-    ax_tsne.text(0.02, 0.98, 'A.', transform=ax_tsne.transAxes,
+    ax_tsne.text(0.02, 0.98, 'A', transform=ax_tsne.transAxes,
                 fontsize=20, fontweight='bold', va='top', ha='left')
     
     # ============================================================
@@ -372,21 +397,21 @@ def plot_combined_ac_figures(
             label="Activity cliffs"
         )
         cbar = plt.colorbar(scatter, ax=ax_sali)
-        cbar.set_label("SALI", fontsize=16)
-        cbar.ax.tick_params(labelsize=12)
+        cbar.set_label("SALI", fontsize=18, fontweight='bold')
+        cbar.ax.tick_params(labelsize=14)
     
     # Threshold lines
     ax_sali.axvline(sim_thr, color="red", linestyle="--", linewidth=1.5, alpha=0.7)
     ax_sali.axhline(potency_diff, color="red", linestyle="--", linewidth=1.5, alpha=0.7)
     
-    ax_sali.set_xlabel("Tanimoto Similarity", fontsize=16)
-    ax_sali.set_ylabel("ΔpIC₅₀", fontsize=16)
-    ax_sali.tick_params(axis='both', labelsize=12)
-    ax_sali.legend(fontsize=12, frameon=True, loc='upper right')
+    ax_sali.set_xlabel("Tanimoto Similarity", fontsize=18, fontweight='bold')
+    ax_sali.set_ylabel("ΔpIC₅₀", fontsize=18, fontweight='bold')
+    ax_sali.tick_params(axis='both', labelsize=14)
+    ax_sali.legend(fontsize=14, frameon=True, loc='upper right')
     ax_sali.grid(True, alpha=0.2)
     
     # Panel label B (top-left corner)
-    ax_sali.text(0.02, 0.98, 'B.', transform=ax_sali.transAxes,
+    ax_sali.text(0.02, 0.98, 'B', transform=ax_sali.transAxes,
                 fontsize=20, fontweight='bold', va='top', ha='left')
     
     plt.tight_layout()
@@ -461,7 +486,7 @@ def run_ac_analysis(
         # Generate combined publication-quality figure
         plot_combined_ac_figures(
             cliffs_df, df, smiles_col, potency_col,
-            os.path.join(results_dir, "combined_ac_figure.png"),
+            os.path.join(results_dir, "combined_ac_figure_(Figure_1).png"),
             config,
             **tsne_params
         )

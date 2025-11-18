@@ -23,18 +23,8 @@ cat(sprintf("Working directory: %s\n\n", getwd()))
 figures_ok <- c()
 figures_fail <- c()
 
-# Figure 1
-cat(strrep("=", 80), "\n", "Figure 1: Reverse QSAR\n", strrep("=", 80), "\n")
-tryCatch({
-  source("R_reporting/figure_1.R", echo = FALSE, print.eval = FALSE)
-  figures_ok <- c(figures_ok, "Figure 1")
-}, error = function(e) {
-  cat(sprintf("\nFailed: %s\n\n", e$message))
-  figures_fail <- c(figures_fail, "Figure 1")
-})
-
 # Figure 2
-cat("\n", strrep("=", 80), "\n", "Figure 2: Predictive Models\n", strrep("=", 80), "\n")
+cat(strrep("=", 80), "\n", "Figure 2: Reverse QSAR\n", strrep("=", 80), "\n")
 tryCatch({
   source("R_reporting/figure_2.R", echo = FALSE, print.eval = FALSE)
   figures_ok <- c(figures_ok, "Figure 2")
@@ -44,13 +34,23 @@ tryCatch({
 })
 
 # Figure 3
-cat("\n", strrep("=", 80), "\n", "Figure 3: CAFE LATE Analysis\n", strrep("=", 80), "\n")
+cat("\n", strrep("=", 80), "\n", "Figure 3: Predictive Models\n", strrep("=", 80), "\n")
 tryCatch({
   source("R_reporting/figure_3.R", echo = FALSE, print.eval = FALSE)
   figures_ok <- c(figures_ok, "Figure 3")
 }, error = function(e) {
   cat(sprintf("\nFailed: %s\n\n", e$message))
   figures_fail <- c(figures_fail, "Figure 3")
+})
+
+# Figure 4
+cat("\n", strrep("=", 80), "\n", "Figure 4: CAFE LATE Analysis\n", strrep("=", 80), "\n")
+tryCatch({
+  source("R_reporting/figure_4.R", echo = FALSE, print.eval = FALSE)
+  figures_ok <- c(figures_ok, "Figure 4")
+}, error = function(e) {
+  cat(sprintf("\nFailed: %s\n\n", e$message))
+  figures_fail <- c(figures_fail, "Figure 4")
 })
 
 # Summary
