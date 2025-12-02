@@ -66,8 +66,8 @@ class MolecularGenerator:
         self.logger = logger or logging.getLogger(__name__)
         
         # Configuration - all parameters from config.yml
-        self.max_attempts = config.get("max_attempts", 50)
-        self.timeout_seconds = config.get("timeout_seconds", 300)
+        self.max_attempts = config.get("max_attempts", 10)
+        self.timeout_seconds = config.get("timeout_seconds", 5)
         self.batch_size = config.get("batch_size", 100)
         self.max_mol_weight = config.get("max_mol_weight", 600)
         self.min_mol_weight = config.get("min_mol_weight", 100)
@@ -118,15 +118,25 @@ class MolecularGenerator:
         # Island Algorithm: Generate around each core
         target_molecules = max_molecules if max_molecules is not None else len(fragment_batch)
         
+        # Get unique fragments (remove duplicates from batch)
+        unique_fragments = {}
+        for frag in fragment_batch:
+            frag_smiles = frag["fragment_smiles"]
+            if frag_smiles not in unique_fragments:
+                unique_fragments[frag_smiles] = frag
+        unique_fragment_list = list(unique_fragments.values())
+        
+        if len(unique_fragment_list) < len(fragment_batch):
+            self.logger.debug(f"Reduced fragment batch from {len(fragment_batch)} to {len(unique_fragment_list)} unique fragments")
+        
         for core_idx in range(self.n_cores):
             if len(molecules) >= target_molecules:
                 break
                 
             core_smarts = self.cores[core_idx]
-            self.logger.debug(f"Generating molecules around core {core_idx}: {core_smarts}")
-            
-            # Generate molecules for this core using available fragments
-            for fragment in fragment_batch:
+            successful = 0
+            failed = 0
+            for fragment in unique_fragment_list:
                 if len(molecules) >= target_molecules:
                     break
                     
@@ -135,7 +145,49 @@ class MolecularGenerator:
                         fragment["fragment_smiles"], 
                         core_smarts, 
                         core_idx,
-                        fragment_batch  # Pass all fragments for iterative building
+                        unique_fragment_list
+                    )
+                    
+                    if mol_data and mol_data["smiles"] not in seen_smiles:
+                        molecules.append(mol_data)
+                        seen_smiles.add(mol_data["smiles"])
+                        successful += 1
+                        self.generation_stats["core_usage"][core_idx] += 1
+                        self.generation_stats["fragment_usage"][fragment["fragment_smiles"]] = \
+                            self.generation_stats["fragment_usage"].get(fragment["fragment_smiles"], 0) + 1
+                    else:
+                        failed += 1
+                except Exception as e:
+                    failed += 1
+                    continue
+            
+            if core_idx == 0 and len(molecules) == 0:
+                self.logger.warning(f"Core {core_idx}: {successful} successful, {failed} failed. No molecules generated from first core.")
+        
+        if len(molecules) < target_molecules:
+            # Increase max attempts for better exploration, especially with limited fragments
+            max_attempts = min(len(unique_fragment_list) * self.n_cores * 500, 100000)
+            attempt = 0
+            stall_counter = 0
+            last_count = len(molecules)
+            stall_threshold = 20  # More tolerance before giving up
+            
+            if len(molecules) == 0:
+                self.logger.warning(f"No molecules from initial exploration. Trying {max_attempts} additional attempts")
+            
+            while len(molecules) < target_molecules and attempt < max_attempts:
+                attempt += 1
+                
+                core_idx = random.randint(0, self.n_cores - 1)
+                fragment = random.choice(unique_fragment_list)
+                core_smarts = self.cores[core_idx]
+                
+                try:
+                    mol_data = self._generate_single_molecule(
+                        fragment["fragment_smiles"], 
+                        core_smarts, 
+                        core_idx,
+                        unique_fragment_list
                     )
                     
                     if mol_data and mol_data["smiles"] not in seen_smiles:
@@ -144,58 +196,22 @@ class MolecularGenerator:
                         self.generation_stats["core_usage"][core_idx] += 1
                         self.generation_stats["fragment_usage"][fragment["fragment_smiles"]] = \
                             self.generation_stats["fragment_usage"].get(fragment["fragment_smiles"], 0) + 1
-                    elif mol_data and mol_data["smiles"] in seen_smiles:
-                        self.logger.debug(f"Duplicate molecule skipped: {mol_data['smiles']}")
+                        stall_counter = 0  # Reset on success
                         
-                except Exception as e:
-                    self.logger.debug(f"Failed to generate molecule from fragment {fragment.get('fragment_smiles', 'unknown')} on core {core_idx}: {e}")
+                except Exception:
                     continue
-        
-        # Continue generating until we have enough molecules or exhaust all possibilities
-        max_attempts = max(len(fragment_batch) * self.n_cores * 50, target_molecules * 2)  # Scale with target
-        attempt = 0
-        stall_counter = 0
-        last_count = len(molecules)
-        
-        while len(molecules) < target_molecules and attempt < max_attempts:
-            attempt += 1
-            
-            # Randomly select core and fragment for additional generation
-            core_idx = random.randint(0, self.n_cores - 1)
-            fragment = random.choice(fragment_batch)
-            core_smarts = self.cores[core_idx]
-            
-            try:
-                mol_data = self._generate_single_molecule(
-                    fragment["fragment_smiles"], 
-                    core_smarts, 
-                    core_idx,
-                    fragment_batch
-                )
                 
-                if mol_data and mol_data["smiles"] not in seen_smiles:
-                    molecules.append(mol_data)
-                    seen_smiles.add(mol_data["smiles"])
-                    self.generation_stats["core_usage"][core_idx] += 1
-                    self.generation_stats["fragment_usage"][fragment["fragment_smiles"]] = \
-                        self.generation_stats["fragment_usage"].get(fragment["fragment_smiles"], 0) + 1
-                    
-            except Exception as e:
-                self.logger.debug(f"Additional generation attempt {attempt} failed: {e}")
-                continue
-            
-            # Check if we're making progress every 500 attempts (increased from 100)
-            if attempt % 500 == 0:
-                if len(molecules) == last_count:
-                    stall_counter += 1
-                    if stall_counter >= 10:  # No progress in 5000 attempts (increased from 5)
-                        self.logger.debug(f"No progress after {attempt} attempts, stopping (have {len(molecules)} molecules)")
-                        break
-                else:
-                    stall_counter = 0  # Reset if we made progress
-                last_count = len(molecules)
+                # Check for stalling less frequently and with more tolerance
+                if attempt % 500 == 0:
+                    if len(molecules) == last_count:
+                        stall_counter += 1
+                        if stall_counter >= stall_threshold:
+                            self.logger.info(f"Stall detected: no new molecules in {stall_counter * 500} attempts. Generated {len(molecules)}/{target_molecules}")
+                            break
+                    else:
+                        stall_counter = 0
+                    last_count = len(molecules)
         
-        self.logger.debug(f"Generated {len(molecules)} unique molecules from {len(fragment_batch)} fragments across {self.n_cores} cores")
         return molecules
     
     def _generate_single_molecule(self, fragment_smiles: str, core_smarts: str, core_idx: int, fragment_batch: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -235,7 +251,6 @@ class MolecularGenerator:
                     }
                     
             except Exception as e:
-                self.logger.debug(f"Generation attempt {attempt + 1} failed: {e}")
                 continue
         
         self.generation_stats["failed_generations"] += 1

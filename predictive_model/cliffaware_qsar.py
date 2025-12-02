@@ -836,7 +836,7 @@ def run_qsar_evaluation(config: dict, log: logging.Logger):
         # Get number of repeats from config
         n_repeats = int(qcfg.get("n_repeats", 10))
         print(f"  Running {len(engines_cfg)} models with {n_repeats} independent splits each...")
-
+        
         for name in engines_cfg:
             label = f"{name}"
             model_path = models_dir / f"{label}.joblib"
@@ -947,6 +947,17 @@ def run_qsar_evaluation(config: dict, log: logging.Logger):
         # ----------------- Persist per-backbone metrics & summary ----------------
         # Save CSV files: numeric (for calculations), formatted (for publication) and all_runs (for diagnostics)
         print(f"  Saving metrics CSVs (all_runs: {len(all_runs_metrics)}, aggregated: {len(aggregated_metrics)})")
+        
+        # Save all_runs CSV
+        all_runs_csv = RR / "model_metrics_all_runs.csv"
+        if all_runs_metrics:
+            all_runs_df = pd.DataFrame(all_runs_metrics)
+            if 'backbone' not in all_runs_df.columns:
+                all_runs_df['backbone'] = backbone
+            if 'model' not in all_runs_df.columns:
+                all_runs_df['model'] = all_runs_df.get('name', '')
+            all_runs_df.to_csv(all_runs_csv, index=False, float_format='%.6f')
+        
         if all_runs_metrics:
             if aggregated_metrics:
                 aggregated_df = pd.DataFrame(aggregated_metrics)

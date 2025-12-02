@@ -127,7 +127,7 @@ def main():
     # ─────────────────────────────────────────────────────────────
     lib_cfg = config.get("ReverseQSAR", {}).get("library", {})
     if lib_cfg.get("enable", True):
-        frag_root = Path(paths.get("fragments", "results/ReverseQSAR"))
+        frag_root = Path(paths.get("fragments", "results/reverse_QSAR"))
         all_csv = frag_root / "reinvent_fragments_all.csv"
         force_lib = bool(lib_cfg.get("force_rerun", False))
         
@@ -138,6 +138,16 @@ def main():
             print(f"Exported {len(frags)} fragments to {all_csv}")
         else:
             print(f"REINVENT library already present ({all_csv}). Skipping.")
+        
+        # Also create vanilla fragment library (for validation)
+        vanilla_csv = frag_root / "reinvent_fragments_vanilla.csv"
+        if force_lib or not vanilla_csv.exists():
+            print("Building vanilla fragment library (threshold fragments only)...")
+            from reverse_qsar.reinvent_library import run_vanilla_library
+            vanilla_frags = run_vanilla_library(config)
+            print(f"Exported {len(vanilla_frags)} vanilla fragments to {vanilla_csv}")
+        else:
+            print(f"Vanilla library already present ({vanilla_csv}). Skipping.")
     else:
         print("REINVENT library export disabled in config.")
 
@@ -203,16 +213,49 @@ def main():
         gen_dir = Path(gen_cfg.get("output", {}).get("results_dir", "results/generation"))
         summary_json = gen_dir / gen_cfg.get("output", {}).get("files", {}).get("summary", "generation_summary.json")
         force_gen = bool(gen_cfg.get("force_rerun", False))
-
-        if force_gen or not summary_json.exists():
-            print("Running AC-aware molecular generation...")
-            result = run_generator(config, log)
-            if result["success"]:
-                print("Molecular generation completed successfully.")
+        
+        # Check if vanilla-only mode is requested
+        vanilla_only = bool(gen_cfg.get("vanilla_only", False))
+        
+        # Run CAFE generation (unless vanilla_only is True)
+        if not vanilla_only:
+            if force_gen or not summary_json.exists():
+                print("Running AC-aware molecular generation (CAFE/CAFE LATE)...")
+                result = run_generator(config, log, vanilla_mode=False)
+                if result["success"]:
+                    print("CAFE molecular generation completed successfully.")
+                else:
+                    log.error(f"CAFE molecular generation failed: {result.get('error', 'Unknown error')}")
             else:
-                log.error(f"Molecular generation failed: {result.get('error', 'Unknown error')}")
+                print(f"CAFE molecular generation outputs found ({summary_json}). Skipping CAFE generation step.")
+        
+        # Run vanilla generation (always run for validation, or if vanilla_only is True)
+        vanilla_summary_json = gen_dir / "generation_summary_vanilla.json"
+        if vanilla_only or force_gen or not vanilla_summary_json.exists():
+            print("Running vanilla molecular generation (validation mode, no CAFE/CAFE LATE)...")
+            
+            # Vanilla fragment library should already exist from step 4, but check
+            vanilla_csv = Path(paths.get("fragments", "results/reverse_QSAR")) / "reinvent_fragments_vanilla.csv"
+            if not vanilla_csv.exists():
+                log.warning(f"Vanilla fragment library not found at {vanilla_csv}. Creating it now...")
+                from reverse_qsar.reinvent_library import run_vanilla_library
+                try:
+                    vanilla_frags = run_vanilla_library(config)
+                    print(f"Vanilla fragment library prepared: {len(vanilla_frags)} fragments")
+                except Exception as e:
+                    log.error(f"Failed to create vanilla fragment library: {e}")
+                    if not vanilla_only:
+                        print("Skipping vanilla generation due to library creation failure.")
+                    else:
+                        raise
+            
+            result = run_generator(config, log, vanilla_mode=True)
+            if result["success"]:
+                print("Vanilla molecular generation completed successfully.")
+            else:
+                log.error(f"Vanilla molecular generation failed: {result.get('error', 'Unknown error')}")
         else:
-            print(f"Molecular generation outputs found ({summary_json}). Skipping generation step.")
+            print(f"Vanilla molecular generation outputs found ({vanilla_summary_json}). Skipping vanilla generation step.")
     else:
         print("Molecular generation disabled in config.")
 

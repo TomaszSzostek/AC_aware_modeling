@@ -42,16 +42,18 @@ class ACGenerator:
     to improve predictions for cliff-like chemical space.
     """
     
-    def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None):
+    def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None, vanilla_mode: bool = False):
         """
         Initialize the AC Generator.
         
         Args:
             config: Configuration dictionary
             logger: Optional logger instance
+            vanilla_mode: If True, use vanilla fragments and disable CAFE scoring
         """
         self.config = config
         self.logger = logger or logging.getLogger(__name__)
+        self.vanilla_mode = vanilla_mode
         
         # Extract configuration sections
         self.gen_config = config.get("Generator", {})
@@ -94,15 +96,27 @@ class ACGenerator:
         else:
             self.original_smiles_set = set()
         
-        # Load fragment library
-        frag_path = self.gen_config.get("fragment_library")
-        if not frag_path:
-            raise ValueError("fragment_library path not found in config!")
+        # Load fragment library (vanilla or CAFE)
+        if self.vanilla_mode:
+            frag_root = self.paths_config.get("fragments", "results/reverse_QSAR")
+            frag_path = Path(frag_root) / "reinvent_fragments_vanilla.csv"
+            if not frag_path.exists():
+                raise FileNotFoundError(f"Vanilla fragment library not found: {frag_path}. Run vanilla library generation first.")
+            print(f"   [VANILLA MODE] Loading vanilla fragments from {frag_path}")
+        else:
+            frag_path = self.gen_config.get("fragment_library")
+            if not frag_path:
+                raise ValueError("fragment_library path not found in config!")
+            print(f"   [CAFE MODE] Loading CAFE fragments from {frag_path}")
+        
         self.fragment_library = pd.read_csv(frag_path)
         print(f"   Loaded {len(self.fragment_library)} fragments from {frag_path}")
         
-        # Load AC-enriched fragments if available
-        self._load_ac_enriched_fragments()
+        # Load AC-enriched fragments if available (skip in vanilla mode)
+        if not self.vanilla_mode:
+            self._load_ac_enriched_fragments()
+        else:
+            print("   [VANILLA MODE] Skipping AC-enriched fragments loading")
         
         # Initialize components with data
         self._initialize_components()
@@ -171,10 +185,15 @@ class ACGenerator:
         # Set core count for sampler
         self.sampler.set_core_count(len(self.gen_config.get("cores", [])))
         
-        # Initialize scorer
+        # Initialize scorer (disable CAFE in vanilla mode)
+        scoring_config = self.gen_config.get("scoring", {}).copy()
+        if self.vanilla_mode:
+            scoring_config["enable_cafe_scoring"] = False
+            print("   [VANILLA MODE] CAFE LATE scoring disabled")
+        
         self.scorer = MolecularScorer(
-            qsar_model_path=self.gen_config.get("scoring", {}).get("qsar_model_path"),
-            config=self.gen_config.get("scoring", {}),
+            qsar_model_path=scoring_config.get("qsar_model_path"),
+            config=scoring_config,
             logger=self.logger
         )
         
@@ -236,30 +255,40 @@ class ACGenerator:
         batch_size = self.gen_config.get("generation", {}).get("batch_size", 1000)
         dedup_config = self.gen_config.get("generation", {}).get("deduplication", {})
         
-        all_molecules = []
-        global_seen_smiles = set()  # Global deduplication across all batches
+        mode_str = "[VANILLA]" if self.vanilla_mode else "[CAFE]"
+        print(f"{mode_str} Starting generation: target={n_samples}, batch_size={batch_size}, fragments={len(self.fragment_library)}")
         
-        # Continue generating until we reach n_samples or exhaust possibilities
+        all_molecules = []
+        global_seen_smiles = set()
         total_attempts = 0
-        max_total_attempts = n_samples * 20  # Increased for large-scale generation (was 5x)
+        max_total_attempts = n_samples * 50 if self.vanilla_mode else n_samples * 20  # More attempts for vanilla
         consecutive_empty_batches = 0
-        max_empty_batches = 10  # Stop if 10 consecutive batches produce no new molecules (was 5)
+        max_empty_batches = 50 if self.vanilla_mode else 10  # More tolerance for vanilla with fewer fragments
+        
+        import time
+        generation_start_time = time.time()
+        last_progress_time = time.time()
+        max_no_progress_time = 3600 if self.vanilla_mode else 600  # 1 hour for vanilla, 10 min for CAFE
         
         while len(global_seen_smiles) < n_samples and total_attempts < max_total_attempts:
-            # Sample fragments for this batch with increased diversity
-            fragment_batch = self.sampler.sample_fragments(batch_size)
-            
-            # Add more diversity by shuffling the batch
+            actual_batch_size = batch_size
+            if self.vanilla_mode and len(self.fragment_library) < batch_size:
+                # For vanilla with limited fragments, use more aggressive sampling
+                actual_batch_size = min(len(self.fragment_library) * 50, batch_size * 2)
+            fragment_batch = self.sampler.sample_fragments(actual_batch_size)
             random.shuffle(fragment_batch)
             
-            # Generate molecules - limit to remaining samples needed
             remaining_samples = n_samples - len(global_seen_smiles)
-            if remaining_samples > 0:
-                molecules = self.molecular_generator.generate_molecules(fragment_batch, max_molecules=remaining_samples)
-            else:
-                molecules = []
+            batch_start = time.time()
+            molecules = self.molecular_generator.generate_molecules(fragment_batch, max_molecules=remaining_samples) if remaining_samples > 0 else []
+            batch_time = time.time() - batch_start
             
-            # Global deduplication - only add truly unique molecules
+            if len(molecules) == 0:
+                if len(global_seen_smiles) == 0:
+                    print(f"{mode_str} WARNING: generate_molecules returned 0 molecules after {batch_time:.1f}s. Check fragment/core compatibility.")
+                elif consecutive_empty_batches == 0:
+                    print(f"{mode_str} Empty batch after {batch_time:.1f}s (total: {len(global_seen_smiles)} molecules)")
+            
             unique_molecules = []
             duplicates_count = 0
             for mol in molecules:
@@ -268,54 +297,47 @@ class ACGenerator:
                     global_seen_smiles.add(mol["smiles"])
                 else:
                     duplicates_count += 1
-                    if dedup_config.get("log_duplicates", False):
-                        self.logger.debug(f"Global duplicate skipped: {mol['smiles']}")
             
-            # Update statistics
             self.stats["generated"] += len(unique_molecules)
             total_attempts += len(molecules)
             
-            # Log progress with deduplication stats
             log_interval = self.gen_config.get("output", {}).get("log_interval", 1000)
-            if len(global_seen_smiles) % log_interval == 0 or len(global_seen_smiles) == n_samples:
+            if len(global_seen_smiles) % log_interval == 0 or len(global_seen_smiles) == n_samples or (self.vanilla_mode and len(global_seen_smiles) % 100 == 0):
                 progress_pct = (len(global_seen_smiles) / n_samples) * 100
                 dup_rate = (duplicates_count / len(molecules) * 100) if len(molecules) > 0 else 0
                 print(
-                    f"Generated: {len(global_seen_smiles)}/{n_samples} "
+                    f"{mode_str} Generated: {len(global_seen_smiles)}/{n_samples} "
                     f"({progress_pct:.1f}%) | Attempts: {total_attempts} | "
                     f"This batch: {len(unique_molecules)} unique, "
                     f"{duplicates_count} duplicates ({dup_rate:.1f}%)"
                 )
-                self.logger.info(f"Generated {len(global_seen_smiles)} unique molecules (target: {n_samples}, attempts: {total_attempts})")
             
             all_molecules.extend(unique_molecules)
             
-            # If no new molecules were generated in this batch, we might be stuck
-            if len(unique_molecules) == 0:
+            if len(unique_molecules) > 0:
+                last_progress_time = time.time()
+                consecutive_empty_batches = 0
+            else:
                 consecutive_empty_batches += 1
-                self.logger.warning(
-                    "No new molecules in this batch "
-                    f"({consecutive_empty_batches}/{max_empty_batches}). "
-                    f"Total unique: {len(global_seen_smiles)}"
-                )
                 if consecutive_empty_batches >= max_empty_batches:
                     print(
-                        "Chemical space exhausted. Generated "
-                        f"{len(global_seen_smiles)} unique molecules "
-                        f"(target was {n_samples})."
+                        f"{mode_str} Chemical space exhausted. Generated "
+                        f"{len(global_seen_smiles)} unique molecules (target was {n_samples})."
                     )
-                    print(
-                        "With "
-                        f"{len(self.fragment_library)} fragments, this is close "
-                        "to the theoretical maximum."
-                    )
-                    self.logger.warning(f"Stopping: {consecutive_empty_batches} consecutive batches with no new molecules")
                     break
-            else:
-                consecutive_empty_batches = 0  # Reset counter when we get new molecules
+            
+            if self.vanilla_mode:
+                time_since_progress = time.time() - last_progress_time
+                if time_since_progress > max_no_progress_time:
+                    elapsed_minutes = (time.time() - generation_start_time) / 60
+                    print(
+                        f"{mode_str} No progress for {time_since_progress/60:.1f} minutes. "
+                        f"Generated {len(global_seen_smiles)} molecules in {elapsed_minutes:.1f} minutes. Stopping."
+                    )
+                    break
         
         print(
-            f"Total unique molecules generated: {len(global_seen_smiles)} "
+            f"{mode_str} Total unique molecules generated: {len(global_seen_smiles)} "
             f"(target: {n_samples})"
         )
         return all_molecules
@@ -505,11 +527,17 @@ class ACGenerator:
         # Save final diverse set
         if "final_diverse" in results:
             # Save as CSV file (publication-ready format)
-            final_csv_path = results_dir / files_config.get("final_dataset", "hits.csv")
+            if self.vanilla_mode:
+                final_csv_path = results_dir / files_config.get("final_dataset_vanilla", "hits_vanilla.csv")
+            else:
+                final_csv_path = results_dir / files_config.get("final_dataset", "hits.csv")
             self._save_scored_csv(results["final_diverse"], final_csv_path)
 
         # Save summary
-        summary_path = results_dir / files_config.get("summary", "generation_summary.json")
+        if self.vanilla_mode:
+            summary_path = results_dir / files_config.get("summary_vanilla", "generation_summary_vanilla.json")
+        else:
+            summary_path = results_dir / files_config.get("summary", "generation_summary.json")
         self._save_summary(summary_path)
         
         # Save additional monitoring files
@@ -669,17 +697,18 @@ class ACGenerator:
                 print(f"   {reason}: {count}")
 
 
-def run_generator(config: Dict[str, Any], logger: Optional[logging.Logger] = None) -> Dict[str, Any]:
+def run_generator(config: Dict[str, Any], logger: Optional[logging.Logger] = None, vanilla_mode: bool = False) -> Dict[str, Any]:
     """
     Run the molecular generation pipeline.
     
     Args:
         config: Configuration dictionary
         logger: Optional logger instance
+        vanilla_mode: If True, use vanilla fragments and disable CAFE scoring
         
     Returns:
         Dictionary containing generation results
     """
-    generator = ACGenerator(config, logger)
+    generator = ACGenerator(config, logger, vanilla_mode=vanilla_mode)
     generator.load_data()
     return generator.generate_molecules()

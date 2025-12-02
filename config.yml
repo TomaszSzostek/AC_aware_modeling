@@ -179,7 +179,7 @@ ReverseQSAR:
 # ============================================================================
 
 QSAR_Eval:
-  enable: true                  # Enable QSAR evaluation pipeline
+  enable: false                  # Enable QSAR evaluation pipeline
   force_rerun: false             # Force recomputation of all results
   rebuild_features: false        # Force rebuild of feature matrices (ignore cached features)
   n_repeats: 10                  # Number of independent runs per model for uncertainty estimation (publication quality)
@@ -191,12 +191,7 @@ QSAR_Eval:
                                 # α = 0.5: Prioritize mean performance
                                 # α = 1.0: Balanced (equal weights for mean and stability)
                                 # α = 2.0: Prioritize stability
-  
-  # Resume functionality (enables incremental computation)
-  resume:
-    enable: true                 # Enable resume: skip existing artifacts, only recompute missing ones
-    overwrite: false             # If true, overwrite existing artifacts instead of skipping
-  
+
   # Data splitting (prevents data leakage)
   split:
     mode: cliff_group            # Split mode: "butina" (scaffold clustering) or "cliff_group" (AC groups)
@@ -417,7 +412,12 @@ Generator:
     
     files:
       post_score: "post_score.csv"        # Scored molecules before selection (optional)
-      final_dataset: "hits.csv"           # Final selected molecules with scores and metadata
-      summary: "generation_summary.json"   # Generation statistics and metadata
+      final_dataset: "hits.csv"           # Final selected molecules with scores and metadata (CAFE mode)
+      final_dataset_vanilla: "hits_vanilla.csv"  # Final selected molecules for vanilla mode (validation)
+      summary: "generation_summary.json"   # Generation statistics and metadata (CAFE mode)
+      summary_vanilla: "generation_summary_vanilla.json"  # Generation statistics for vanilla mode
       fragment_usage: "fragment_usage.csv"  # Fragment usage statistics (optional)
       core_usage: "core_usage.csv"        # Core scaffold usage statistics (optional)
+  
+  # Vanilla generation mode (validation)
+  vanilla_only: true                     # If true, run only vanilla generation (skip CAFE generation)

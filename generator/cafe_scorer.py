@@ -58,9 +58,13 @@ class CAFEScorer:
         self.cafe_weight = config.get("cafe_weight", 0.3)  # Max 30% adjustment
         self.enrichment_threshold = config.get("enrichment_threshold", 1.0)
         
-        # Load CAFE fragment data
+        # Load CAFE fragment data only if CAFE is enabled
         self.cafe_fragments: Dict[str, Dict] = {}
-        self._load_cafe_fragments(config)
+        if self.enable_cafe:
+            self._load_cafe_fragments(config)
+        else:
+            if logger and logger.level <= logging.INFO:
+                logger.info("CAFE LATE scoring disabled - skipping fragment loading")
     
     def _load_cafe_fragments(self, config: Dict) -> None:
         """
