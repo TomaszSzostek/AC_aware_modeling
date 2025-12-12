@@ -55,13 +55,21 @@ class CAFEScorer:
         
         # CAFE parameters from config
         self.enable_cafe = config.get("enable_cafe_scoring", True)
-        self.cafe_weight = config.get("cafe_weight", 0.3)  # Max 30% adjustment
+        # NOTE: cafe_weight is deprecated - CAFE bonus now uses beta_cafe from selection.cafe.beta_list
+        # Keep for backward compatibility with adjust_qsar_score (which is disabled in new implementation)
+        self.cafe_weight = config.get("cafe_weight", 0.3)  # DEPRECATED - only used in adjust_qsar_score (disabled)
         self.enrichment_threshold = config.get("enrichment_threshold", 1.0)
+        self.sali_clip_percentile = config.get("sali_clip_percentile", 99.0)  # Winsorization percentile
         
         # Load CAFE fragment data only if CAFE is enabled
         self.cafe_fragments: Dict[str, Dict] = {}
+        self.fragment_E: Dict[str, float] = {}  # E(f) values for fragments
+        self.fragment_Ez: Dict[str, float] = {}  # Z-scores of E(f)
         if self.enable_cafe:
             self._load_cafe_fragments(config)
+            # Compute Ez scores after loading fragments
+            if self.fragment_E:
+                self._compute_Ez()
         else:
             if logger and logger.level <= logging.INFO:
                 logger.info("CAFE LATE scoring disabled - skipping fragment loading")
@@ -119,16 +127,26 @@ class CAFEScorer:
             ac_added = df[df["selected_by"] == "AC_added"].copy()
             
             # Build fragment lookup dictionary
+            # Note: We need to recompute E(f) with winsorization if we have raw SALI data
+            # For now, we use ac_enrichment from CSV and apply winsorization if needed
             for _, row in ac_added.iterrows():
                 frag_smiles = row["fragment_smiles"]
+                ac_enrichment = row.get("ac_enrichment", 0.0)
+                
+                # Apply winsorization at P99 if we have raw SALI data
+                # For now, we'll use the stored ac_enrichment and compute Ez
+                # If raw SALI data is available, we can recompute E(f) with winsorization
                 
                 # Store fragment metadata
                 self.cafe_fragments[frag_smiles] = {
-                    "ac_enrichment": row.get("ac_enrichment", 0.0),
+                    "ac_enrichment": ac_enrichment,
                     "n_cliff_pairs": row.get("n_cliff_pairs", 0),
                     "cliff_pairs_ac_enrichment": row.get("cliff_pairs_ac_enrichment", ""),
                     "importance": row.get("importance", 0.0)
                 }
+                
+                # Store E(f) value (ac_enrichment is E(f))
+                self.fragment_E[frag_smiles] = ac_enrichment
             
             if self.logger.level <= logging.INFO:
                 self.logger.info(f"   Loaded {len(self.cafe_fragments)} CAFE-added fragments.")
@@ -140,6 +158,73 @@ class CAFEScorer:
         except Exception as e:
             self.logger.error(f"Failed to load CAFE fragments: {e}")
             self.enable_cafe = False
+    
+    def _compute_Ez(self) -> None:
+        """
+        Compute z-scores (Ez) for fragment E(f) values.
+        
+        Ez(f) = (E(f) - mean(E)) / std(E)
+        
+        This normalizes the enrichment scores to have mean=0 and std=1,
+        making them comparable across different scales.
+        """
+        if not self.fragment_E:
+            return
+        
+        E_values = np.array(list(self.fragment_E.values()))
+        
+        # Compute mean and std
+        mean_E = np.mean(E_values)
+        std_E = np.std(E_values)
+        
+        # Avoid division by zero
+        if std_E < 1e-10:
+            std_E = 1.0
+        
+        # Compute z-scores
+        for frag_smiles, E_val in self.fragment_E.items():
+            Ez = (E_val - mean_E) / std_E
+            self.fragment_Ez[frag_smiles] = float(Ez)
+        
+        if self.logger.level <= logging.INFO:
+            self.logger.info(f"   Computed Ez scores for {len(self.fragment_Ez)} fragments (mean={mean_E:.3f}, std={std_E:.3f})")
+    
+    def save_Ez_scores(self, output_path: Path) -> None:
+        """
+        Save Ez scores to Parquet file for use in selection.
+        
+        Args:
+            output_path: Path to save the Parquet file
+        """
+        if not self.fragment_Ez:
+            self.logger.warning("No Ez scores to save")
+            return
+        
+        # Create DataFrame with fragment SMILES and Ez scores
+        data = {
+            "fragment_smiles": list(self.fragment_Ez.keys()),
+            "E": [self.fragment_E.get(frag, 0.0) for frag in self.fragment_Ez.keys()],
+            "Ez": list(self.fragment_Ez.values())
+        }
+        df = pd.DataFrame(data)
+        
+        # Save to Parquet
+        df.to_parquet(output_path, index=False, engine='pyarrow')
+        
+        if self.logger.level <= logging.INFO:
+            self.logger.info(f"   Saved Ez scores to {output_path}")
+    
+    def get_Ez(self, fragment_smiles: str) -> float:
+        """
+        Get Ez score for a fragment.
+        
+        Args:
+            fragment_smiles: Fragment SMILES string
+            
+        Returns:
+            Ez score (z-score of E(f)), or 0.0 if fragment not found
+        """
+        return self.fragment_Ez.get(fragment_smiles, 0.0)
     
     def calculate_cafe_boost(self, fragments_used: List[str]) -> Tuple[float, Dict]:
         """
@@ -163,11 +248,18 @@ class CAFEScorer:
         if not self.enable_cafe or not fragments_used:
             return 0.0, {"cafe_enabled": False}
         
+        # Get UNIQUE fragments only - don't count duplicates
+        # If same fragment appears multiple times, count it only once
+        if isinstance(fragments_used, str):
+            unique_fragments = set(f.strip() for f in fragments_used.split(";") if f.strip())
+        else:
+            unique_fragments = set(fragments_used)
+        
         # Identify which CAFE fragments (AC_added only) are present
         cafe_fragments_present = []
         total_enrichment = 0.0
         
-        for frag in fragments_used:
+        for frag in unique_fragments:
             if frag in self.cafe_fragments:
                 frag_data = self.cafe_fragments[frag]
                 enrichment = frag_data["ac_enrichment"]

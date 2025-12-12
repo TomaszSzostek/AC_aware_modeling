@@ -217,19 +217,7 @@ def main():
         # Check if vanilla-only mode is requested
         vanilla_only = bool(gen_cfg.get("vanilla_only", False))
         
-        # Run CAFE generation (unless vanilla_only is True)
-        if not vanilla_only:
-            if force_gen or not summary_json.exists():
-                print("Running AC-aware molecular generation (CAFE/CAFE LATE)...")
-                result = run_generator(config, log, vanilla_mode=False)
-                if result["success"]:
-                    print("CAFE molecular generation completed successfully.")
-                else:
-                    log.error(f"CAFE molecular generation failed: {result.get('error', 'Unknown error')}")
-            else:
-                print(f"CAFE molecular generation outputs found ({summary_json}). Skipping CAFE generation step.")
-        
-        # Run vanilla generation (always run for validation, or if vanilla_only is True)
+        # Run vanilla generation FIRST (ligand_id 1-100)
         vanilla_summary_json = gen_dir / "generation_summary_vanilla.json"
         if vanilla_only or force_gen or not vanilla_summary_json.exists():
             print("Running vanilla molecular generation (validation mode, no CAFE/CAFE LATE)...")
@@ -256,6 +244,30 @@ def main():
                 log.error(f"Vanilla molecular generation failed: {result.get('error', 'Unknown error')}")
         else:
             print(f"Vanilla molecular generation outputs found ({vanilla_summary_json}). Skipping vanilla generation step.")
+        
+        # Run CAFE generation AFTER vanilla (ligand_id 101+)
+        if not vanilla_only:
+            if force_gen or not summary_json.exists():
+                print("Running AC-aware molecular generation (CAFE/CAFE LATE)...")
+                result = run_generator(config, log, vanilla_mode=False)
+                if result["success"]:
+                    print("CAFE molecular generation completed successfully.")
+                else:
+                    log.error(f"CAFE molecular generation failed: {result.get('error', 'Unknown error')}")
+            else:
+                print(f"CAFE molecular generation outputs found ({summary_json}). Skipping CAFE generation step.")
+        
+        # Create unified hits_for_docking.csv after both vanilla and CAFE are done
+        if gen_cfg.get("enable", True):
+            from generator.generator import ACGenerator
+            gen_dir = Path(gen_cfg.get("output", {}).get("results_dir", "results/generation"))
+            generator = ACGenerator(config, log, vanilla_mode=False)
+            generator.gen_config = gen_cfg
+            generator.paths_config = paths
+            try:
+                generator.create_hits_for_docking(gen_dir)
+            except Exception as e:
+                log.warning(f"Could not create hits_for_docking.csv: {e}")
     else:
         print("Molecular generation disabled in config.")
 

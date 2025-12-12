@@ -12,7 +12,7 @@ Key Features:
 - Activity cliff highlighting (triangles)
 - Publication-ready visualizations
 
-Results are saved in `results/AC_analysis/pca_projection_(Figure_S2).png`.
+Results are saved in `results/AC_analysis/pca_projection_(Figure_S1).png`.
 """
 
 import os
@@ -26,6 +26,9 @@ from rdkit.Chem import rdFingerprintGenerator
 from sklearn.decomposition import PCA
 
 # Import AC analysis functions for fingerprint computation
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 from AC_analysis.ac_analysis import compute_fingerprints
 
 # ======================================================
@@ -214,7 +217,7 @@ def main():
     dataset_path = Path(config["Paths"]["dataset"])
     ac_results_dir = Path(config["Paths"]["ac_analysis"])
     cliffs_path = ac_results_dir / "activity_cliffs.csv"
-    output_path = ac_results_dir / "pca_projection_(Figure_S2).png"
+    output_path = ac_results_dir / "pca_projection_(Figure_S1).png"
     
     # AC analysis config
     ac_config = config.get("AC_Analysis", {})

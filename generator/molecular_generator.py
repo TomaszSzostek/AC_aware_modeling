@@ -16,7 +16,7 @@ Key Features:
 import logging
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any, Generator
+from typing import Dict, List, Tuple, Optional, Any
 import random
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors, Descriptors
@@ -81,9 +81,7 @@ class MolecularGenerator:
             "total_attempts": 0,
             "successful_generations": 0,
             "failed_generations": 0,
-            "timeout_generations": 0,
-            "core_usage": {i: 0 for i in range(self.n_cores)},
-            "fragment_usage": {}
+            "timeout_generations": 0
         }
         
         # Molecular generator initialized
@@ -152,9 +150,6 @@ class MolecularGenerator:
                         molecules.append(mol_data)
                         seen_smiles.add(mol_data["smiles"])
                         successful += 1
-                        self.generation_stats["core_usage"][core_idx] += 1
-                        self.generation_stats["fragment_usage"][fragment["fragment_smiles"]] = \
-                            self.generation_stats["fragment_usage"].get(fragment["fragment_smiles"], 0) + 1
                     else:
                         failed += 1
                 except Exception as e:
@@ -193,9 +188,6 @@ class MolecularGenerator:
                     if mol_data and mol_data["smiles"] not in seen_smiles:
                         molecules.append(mol_data)
                         seen_smiles.add(mol_data["smiles"])
-                        self.generation_stats["core_usage"][core_idx] += 1
-                        self.generation_stats["fragment_usage"][fragment["fragment_smiles"]] = \
-                            self.generation_stats["fragment_usage"].get(fragment["fragment_smiles"], 0) + 1
                         stall_counter = 0  # Reset on success
                         
                 except Exception:
@@ -519,36 +511,6 @@ class MolecularGenerator:
             self.logger.debug(f"Molecule validation failed: {smiles}, error: {e}")
             return False
     
-    
-    def stream_generate(self, fragment_batch: List[Dict[str, Any]]) -> Generator[Dict[str, Any], None, None]:
-        """
-        Stream generate molecules (generator function).
-        
-        Args:
-            fragment_batch: List of fragment dictionaries
-            
-        Yields:
-            Generated molecule dictionaries
-        """
-        for fragment in fragment_batch:
-            try:
-                # Generate molecule around random core
-                core_idx = random.randint(0, self.n_cores - 1)
-                core_smarts = self.cores[core_idx]
-                
-                # Generate molecule
-                mol_data = self._generate_single_molecule(
-                    fragment["fragment_smiles"], 
-                    core_smarts, 
-                    core_idx
-                )
-                
-                if mol_data:
-                    yield mol_data
-                    
-            except Exception as e:
-                self.logger.warning(f"Stream generation failed for fragment {fragment.get('fragment_smiles', 'unknown')}: {e}")
-                continue
     
     def get_generation_stats(self) -> Dict[str, Any]:
         """Get generation statistics."""

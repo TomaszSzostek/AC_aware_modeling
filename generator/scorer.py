@@ -31,6 +31,7 @@ import pickle
 from pathlib import Path
 import warnings
 import os
+from multiprocessing import Pool, cpu_count
 
 # Import CAFE LATE scorer
 from .cafe_scorer import CAFEScorer
@@ -86,6 +87,18 @@ class MolecularScorer:
     def _load_qsar_model(self) -> None:
         """Load the trained QSAR model."""
         try:
+            # Try to load model - handle missing dependencies gracefully
+            import sys
+            import importlib
+            
+            # Check if imblearn is needed and try to import it
+            try:
+                import imblearn
+            except ImportError:
+                # If model uses imblearn, we need to install it or handle it
+                # For now, try to load anyway - joblib might handle it
+                pass
+            
             # Load the main model
             self.qsar_model = joblib.load(self.qsar_model_path)
             if self.logger.level <= logging.INFO:
@@ -101,9 +114,43 @@ class MolecularScorer:
             self.selected_indices = self._parse_feature_indices()
             if self.selected_indices and self.logger.level <= logging.INFO:
                 print(f"   Selected features: {len(self.selected_indices)} / {self._get_full_fp_size()} bits")
+            
+            # Verify model can make predictions with correct feature count
+            if self.qsar_model is not None and self.selected_indices is not None:
+                # Test with correct number of features based on selected_indices
+                n_features = len(self.selected_indices)
+                test_features = np.zeros((1, n_features))
+                try:
+                    _ = self.qsar_model.predict_proba(test_features)
+                    if self.logger.level <= logging.INFO:
+                        print(f"   QSAR model verified and ready for predictions ({n_features} features)")
+                except Exception as e:
+                    self.logger.warning(f"QSAR model loaded but prediction test failed: {e}")
+                    self.logger.warning("   Will use default score 0.5 for all molecules")
+                    self.qsar_model = None
+            elif self.qsar_model is not None:
+                # If no selected_indices, try to infer from model
+                try:
+                    n_features = self.qsar_model.n_features_in_
+                    test_features = np.zeros((1, n_features))
+                    _ = self.qsar_model.predict_proba(test_features)
+                    if self.logger.level <= logging.INFO:
+                        print(f"   QSAR model verified and ready for predictions ({n_features} features, no feature selection)")
+                except Exception as e:
+                    self.logger.warning(f"QSAR model loaded but prediction test failed: {e}")
+                    self.logger.warning("   Will use default score 0.5 for all molecules")
+                    self.qsar_model = None
                 
+        except ImportError as e:
+            self.logger.error(f"Missing dependency for QSAR model: {e}")
+            self.logger.error("   Install missing package (e.g., pip install imbalanced-learn) or model will use default score 0.5")
+            self.qsar_model = None
+            self.model_type = None
+            self.selected_features = None
+            self.selected_indices = None
         except Exception as e:
             self.logger.error(f"Failed to load QSAR model: {e}")
+            self.logger.error("   Will use default score 0.5 for all molecules")
             self.qsar_model = None
             self.model_type = None
             self.selected_features = None
@@ -263,17 +310,12 @@ class MolecularScorer:
             sa_score = self._compute_sa_score(mol)
             qed_score = self._compute_qed_score(mol)
             
-            # Apply CAFE LATE adjustment to QSAR score if fragments are provided
+            # CAFE LATE adjustment is done in SELECTION stage by adding bonus to aggregate score
+            # We keep qsar_prob_raw here and apply CAFE bonus later in selector
             qsar_prob = qsar_prob_raw
             cafe_metadata = {"cafe_enabled": False}
             
-            if fragments_used is not None and self.cafe_scorer.enable_cafe:
-                qsar_prob, cafe_metadata = self.cafe_scorer.adjust_qsar_score(
-                    qsar_prob_raw, 
-                    fragments_used
-                )
-            
-            # Compute aggregate score (using CAFE LATE-adjusted QSAR if applicable)
+            # Compute aggregate score (CAFE bonus will be added in selection stage)
             aggregate_score = (
                 self.qsar_weight * qsar_prob +
                 self.sa_weight * sa_score +
@@ -401,6 +443,237 @@ class MolecularScorer:
             "error": error_type
         }
     
+    def score_molecules_batch(self, molecules: List[Dict[str, Any]], batch_size: int = 1000) -> List[Dict[str, Any]]:
+        """
+        Score multiple molecules in batch for efficiency.
+        
+        Args:
+            molecules: List of molecule dictionaries with 'smiles' and optional 'fragments_used'
+            batch_size: Batch size for QSAR predictions
+            
+        Returns:
+            List of scored molecule dictionaries
+        """
+        if not molecules:
+            return []
+        
+        # Extract SMILES and fragments
+        smiles_list = [mol.get("smiles", "") for mol in molecules]
+        fragments_list = [mol.get("fragments_used", []) for mol in molecules]
+        
+        # Batch compute QSAR scores
+        qsar_scores = self._compute_qsar_scores_batch(smiles_list, batch_size)
+        
+        # Compute SA and QED in parallel (using multiprocessing if available)
+        sa_scores = self._compute_sa_scores_batch(smiles_list)
+        qed_scores = self._compute_qed_scores_batch(smiles_list)
+        
+        # Apply CAFE LATE adjustments and compute aggregate scores
+        results = []
+        for i, mol in enumerate(molecules):
+            qsar_prob_raw = qsar_scores[i]
+            sa_score = sa_scores[i]
+            qed_score = qed_scores[i]
+            
+            # CAFE LATE adjustment is done in SELECTION stage by adding bonus to aggregate score
+            # We keep qsar_prob_raw here and apply CAFE bonus later in selector
+            qsar_prob = qsar_prob_raw
+            cafe_metadata = {"cafe_enabled": False}
+            
+            # Compute aggregate score
+            aggregate_score = (
+                self.qsar_weight * qsar_prob +
+                self.sa_weight * sa_score +
+                self.qed_weight * qed_score
+            )
+            
+            result = {
+                "qsar_prob_raw": qsar_prob_raw,
+                "qsar_prob": qsar_prob,
+                "sa": sa_score,
+                "qed": qed_score,
+                "score": aggregate_score,
+                "valid_flag": True
+            }
+            
+            if cafe_metadata.get("cafe_enabled"):
+                result["cafe"] = cafe_metadata
+            
+            # Preserve original molecule data
+            result.update({k: v for k, v in mol.items() if k not in result})
+            results.append(result)
+        
+        return results
+    
+    def _compute_qsar_scores_batch(self, smiles_list: List[str], batch_size: int = 1000) -> List[float]:
+        """Compute QSAR scores for a batch of SMILES."""
+        if self.qsar_model is None:
+            return [0.5] * len(smiles_list)
+        
+        try:
+            # Compute features for all molecules
+            all_features = []
+            valid_indices = []
+            
+            for i, smiles in enumerate(smiles_list):
+                try:
+                    mol = Chem.MolFromSmiles(smiles)
+                    if not mol:
+                        continue
+                    
+                    # Compute features
+                    if self.model_type == "ecfp1024":
+                        gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
+                        fp = gen.GetFingerprint(mol)
+                        features = np.array(fp).reshape(1, -1)
+                    elif self.model_type == "ecfp2048":
+                        gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+                        fp = gen.GetFingerprint(mol)
+                        features = np.array(fp).reshape(1, -1)
+                    elif self.model_type == "maccs":
+                        fp = rdMolDescriptors.GetMACCSKeysFingerprint(mol)
+                        arr = np.zeros((fp.GetNumBits(),), dtype=np.int32)
+                        DataStructs.ConvertToNumpyArray(fp, arr)
+                        features = arr[1:].reshape(1, -1).astype(np.float32)
+                    elif self.model_type == "descriptors":
+                        descriptors = self._load_descriptors_list()
+                        if descriptors:
+                            features = self._compute_descriptors(mol, descriptors)
+                        else:
+                            gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
+                            fp = gen.GetFingerprint(mol)
+                            features = np.array(fp).reshape(1, -1)
+                    else:
+                        gen = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=1024)
+                        fp = gen.GetFingerprint(mol)
+                        features = np.array(fp).reshape(1, -1)
+                    
+                    # Apply feature selection
+                    if self.model_type != "descriptors" and self.selected_indices is not None and len(self.selected_indices) > 0:
+                        features = features[:, self.selected_indices]
+                    
+                    all_features.append(features)
+                    valid_indices.append(i)
+                except:
+                    continue
+            
+            if not all_features:
+                return [0.5] * len(smiles_list)
+            
+            # Batch predict
+            features_array = np.vstack(all_features)
+            probs = self.qsar_model.predict_proba(features_array)[:, 1]
+            
+            # Map back to original indices
+            scores = [0.5] * len(smiles_list)
+            for idx, prob in zip(valid_indices, probs):
+                scores[idx] = float(prob)
+            
+            return scores
+            
+        except Exception as e:
+            self.logger.warning(f"Batch QSAR scoring failed: {e}")
+            return [0.5] * len(smiles_list)
+    
+    def _compute_sa_scores_batch(self, smiles_list: List[str]) -> List[float]:
+        """Compute SA scores for a batch of SMILES using multiprocessing for large batches."""
+        try:
+            import sys
+            import os
+            sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+            from SA_score_folder.sascorer import calculateScore
+            
+            # Use multiprocessing for large batches
+            if len(smiles_list) > 1000:
+                n_cores = min(cpu_count(), 8)
+                chunk_size = max(100, len(smiles_list) // (n_cores * 4))
+                with Pool(n_cores) as pool:
+                    scores = pool.map(_compute_sa_score_single, smiles_list, chunksize=chunk_size)
+                return scores
+            else:
+                # Sequential for small batches
+                scores = []
+                for smiles in smiles_list:
+                    try:
+                        mol = Chem.MolFromSmiles(smiles)
+                        if mol:
+                            sa_score = calculateScore(mol)
+                            if sa_score is None:
+                                scores.append(0.5)
+                            else:
+                                normalized_sa = 1.0 - min((sa_score - 1.0) / 9.0, 1.0)
+                                scores.append(float(normalized_sa))
+                        else:
+                            scores.append(0.5)
+                    except:
+                        scores.append(0.5)
+                return scores
+        except Exception as e:
+            self.logger.warning(f"Batch SA scoring failed: {e}")
+            return [0.5] * len(smiles_list)
+    
+    def _compute_qed_scores_batch(self, smiles_list: List[str]) -> List[float]:
+        """Compute QED scores for a batch of SMILES using multiprocessing for large batches."""
+        try:
+            # Use multiprocessing for large batches
+            if len(smiles_list) > 1000:
+                n_cores = min(cpu_count(), 8)
+                chunk_size = max(100, len(smiles_list) // (n_cores * 4))
+                with Pool(n_cores) as pool:
+                    scores = pool.map(_compute_qed_score_single, smiles_list, chunksize=chunk_size)
+                return scores
+            else:
+                # Sequential for small batches
+                scores = []
+                for smiles in smiles_list:
+                    try:
+                        mol = Chem.MolFromSmiles(smiles)
+                        if mol:
+                            qed_score = Descriptors.qed(mol)
+                            scores.append(float(qed_score))
+                        else:
+                            scores.append(0.5)
+                    except:
+                        scores.append(0.5)
+                return scores
+        except Exception as e:
+            self.logger.warning(f"Batch QED scoring failed: {e}")
+            return [0.5] * len(smiles_list)
+    
+# Helper functions for multiprocessing
+def _compute_sa_score_single(smiles: str) -> float:
+    """Compute SA score for a single SMILES (for multiprocessing)."""
+    try:
+        import sys
+        import os
+        sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+        from SA_score_folder.sascorer import calculateScore
+        
+        mol = Chem.MolFromSmiles(smiles)
+        if mol:
+            sa_score = calculateScore(mol)
+            if sa_score is None:
+                return 0.5
+            else:
+                normalized_sa = 1.0 - min((sa_score - 1.0) / 9.0, 1.0)
+                return float(normalized_sa)
+        else:
+            return 0.5
+    except:
+        return 0.5
+
+def _compute_qed_score_single(smiles: str) -> float:
+    """Compute QED score for a single SMILES (for multiprocessing)."""
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol:
+            qed_score = Descriptors.qed(mol)
+            return float(qed_score)
+        else:
+            return 0.5
+    except:
+        return 0.5
+
     def get_scorer_stats(self) -> Dict[str, Any]:
         """Get scorer statistics."""
         stats = {

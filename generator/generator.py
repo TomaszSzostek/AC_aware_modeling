@@ -11,12 +11,9 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
-import yaml
 import json
 from datetime import datetime
 import time
-from multiprocessing import Pool, cpu_count
-from functools import partial
 import tqdm
 import random
 
@@ -199,11 +196,23 @@ class ACGenerator:
         
         # Deduplication is handled by exact SMILES match in _passes_floors (no Tanimoto novelty)
         
-        # Initialize selector
+        # Initialize selector (pass scoring weights for CAFE bonus calculation)
+        selection_config = self.gen_config.get("selection", {}).copy()
+        scoring_config = self.gen_config.get("scoring", {})
+        selection_config["qsar_weight"] = scoring_config.get("qsar_weight", 0.4)
+        selection_config["sa_weight"] = scoring_config.get("sa_weight", 0.4)
+        selection_config["qed_weight"] = scoring_config.get("qed_weight", 0.2)
+        selection_config["paths"] = self.paths_config
+        selection_config["output"] = self.gen_config.get("output", {})
+        
         self.selector = MolecularSelector(
-            config=self.gen_config.get("selection", {}),
+            config=selection_config,
             logger=self.logger
         )
+        
+        # Pass CAFE scorer to selector for ac_enrichment lookup
+        if hasattr(self.scorer, 'cafe_scorer'):
+            self.selector.cafe_scorer = self.scorer.cafe_scorer
     
     def generate_molecules(self) -> Dict[str, Any]:
         """
@@ -344,38 +353,24 @@ class ACGenerator:
     
     
     def _score_molecules(self, molecules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Score molecules using QSAR, SA, and QED with multiprocessing."""
+        """
+        Score molecules using batch QSAR, SA, and QED scoring.
+        
+        Args:
+            molecules: List of molecule dictionaries to score
+            
+        Returns:
+            List of scored molecules that pass floor criteria
+        """
         if not molecules:
             return []
         
-        # Get multiprocessing configuration
-        mp_config = self.gen_config.get("generation", {}).get("multiprocessing", {})
-        enable_mp = mp_config.get("enable", True)
-        max_cores = mp_config.get("max_cores", 8)
-        threshold = mp_config.get("scoring_threshold", 500)
+        batch_size = 1000
+        scored_molecules_all = self.scorer.score_molecules_batch(molecules, batch_size=batch_size)
         
-        # Use multiprocessing for large batches
-        n_molecules = len(molecules)
-        n_cores = min(cpu_count(), max_cores) if max_cores > 0 else cpu_count()  # Use all cores if max_cores is 0 or negative
-        
-        if enable_mp and n_molecules > threshold and n_cores > 1:
-            print(f"   Using {n_cores} cores for scoring ({n_molecules} molecules)")
-            return self._score_molecules_parallel(molecules, n_cores)
-        else:
-            return self._score_molecules_sequential(molecules)
-    
-    def _score_molecules_sequential(self, molecules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Score molecules sequentially (for small batches)."""
         scored_molecules = []
-        
-        for mol in tqdm.tqdm(molecules, desc="Scoring", unit="mol"):
+        for mol in tqdm.tqdm(scored_molecules_all, desc="Filtering", unit="mol"):
             try:
-                # Pass fragments_used to enable CAFE scoring
-                fragments_used = mol.get("fragments_used", [])
-                scores = self.scorer.score_molecule(mol["smiles"], fragments_used=fragments_used)
-                mol.update(scores)
-                
-                # Apply floors and filters
                 passed, reason = self._passes_floors(mol)
                 if passed:
                     scored_molecules.append(mol)
@@ -383,92 +378,11 @@ class ACGenerator:
                     self.stats["dropped_floors"] += 1
                     key = f"floor:{reason}"
                     self.stats["rejection_reasons"][key] = self.stats["rejection_reasons"].get(key, 0) + 1
-                    
             except Exception as e:
-                self.logger.warning(f"Failed to score molecule {mol.get('smiles', 'unknown')}: {e}")
+                self.logger.warning(f"Failed to filter molecule {mol.get('smiles', 'unknown')}: {e}")
                 continue
         
         return scored_molecules
-    
-    def _score_molecules_parallel(self, molecules: List[Dict[str, Any]], n_cores: int) -> List[Dict[str, Any]]:
-        """Score molecules in parallel using multiprocessing."""
-        # Split molecules into chunks
-        chunk_size = max(1, len(molecules) // n_cores)
-        molecule_chunks = [molecules[i:i + chunk_size] for i in range(0, len(molecules), chunk_size)]
-        
-        # Create partial function with config (scorer will be recreated in each worker)
-        score_chunk = partial(self._score_molecule_chunk, self.gen_config, self.original_smiles_set)
-        
-        # Process chunks in parallel
-        with Pool(n_cores) as pool:
-            results = list(tqdm.tqdm(
-                pool.imap(score_chunk, molecule_chunks),
-                total=len(molecule_chunks),
-                desc="Scoring (Parallel)",
-                unit="chunk"
-            ))
-        
-        # Combine results
-        scored_molecules = []
-        for chunk_results in results:
-            for mol, passed_floors, reason in chunk_results:
-                if passed_floors:
-                    scored_molecules.append(mol)
-                else:
-                    self.stats["dropped_floors"] += 1
-                    key = f"floor:{reason}"
-                    self.stats["rejection_reasons"][key] = self.stats["rejection_reasons"].get(key, 0) + 1
-        
-        return scored_molecules
-    
-    @staticmethod
-    def _score_molecule_chunk(config, original_smiles_set: set, molecule_chunk: List[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], bool, str]]:
-        """
-        Score a chunk of molecules (for multiprocessing).
-        
-        Note: Creates scorer instance within worker to avoid pickling issues with CAFE LATE.
-        """
-        # Import here to avoid issues
-        from .scorer import MolecularScorer
-        import logging
-        
-        # Create scorer in worker process (avoids pickle issues)
-        scoring_cfg = config.get("scoring", {})
-        logger = logging.getLogger(__name__)
-        logger.setLevel(logging.ERROR)  # Reduce verbosity in workers
-        
-        scorer = MolecularScorer(
-            qsar_model_path=scoring_cfg.get("qsar_model_path"),
-            config=scoring_cfg,
-            logger=logger
-        )
-        
-        results = []
-        qed_floor = scoring_cfg.get("qed_floor", 0.1)
-        # novelty disabled – exact-match only against original dataset
-        
-        for mol in molecule_chunk:
-            try:
-                # Pass fragments_used to enable CAFE LATE scoring
-                fragments_used = mol.get("fragments_used", [])
-                scores = scorer.score_molecule(mol["smiles"], fragments_used=fragments_used)
-                mol.update(scores)
-                
-                # Apply floors and filters
-                if mol.get("qed", 0) < qed_floor:
-                    results.append((mol, False, "qed"))
-                    continue
-                # Drop if molecule exists exactly in original dataset
-                if mol.get("smiles") in original_smiles_set:
-                    results.append((mol, False, "in_dataset"))
-                    continue
-                results.append((mol, True, "ok"))
-                    
-            except Exception as e:
-                # Skip failed molecules
-                continue
-        
-        return results
     
     def _passes_floors(self, mol: Dict[str, Any]) -> Tuple[bool, str]:
         """Check if molecule passes all floor criteria and return reason."""
@@ -486,12 +400,98 @@ class ACGenerator:
         
         return True, "ok"
     
-    def _select_final_molecules(self, molecules: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Select final diverse set of molecules."""
-        # Apply selection funnel
-        selected = self.selector.select_molecules(molecules)
+    def _select_final_molecules(self, molecules: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Select final diverse set of molecules with multi-weight CAFE selection.
+        
+        Returns dictionary with:
+        - final_diverse: Primary set (union of all weights or best weight)
+        - per_weight: Dictionary of TOP-100 per beta_cafe weight
+        """
+        cafe_config = self.gen_config.get("selection", {}).get("cafe", {})
+        lambda_list = cafe_config.get("lambda_list", [1.0])  # Renamed from beta_list
+        save_per_weight = cafe_config.get("save_per_weight", True)
+        primary_set_mode = cafe_config.get("primary_set_mode", "union")
+        
+        # If no CAFE or only one weight, use simple selection
+        if not self.vanilla_mode and len(lambda_list) > 1:
+            return self._select_multi_weight_cafe(molecules, lambda_list, save_per_weight, primary_set_mode)
+        else:
+            # Single weight selection
+            lambda_cafe = lambda_list[0] if lambda_list else 0.0
+            selected = self.selector.select_molecules(molecules, lambda_cafe=lambda_cafe)
+            
+            # Update statistics
+            self._update_selection_stats(molecules, selected)
+            
+            return selected
+    
+    def _select_multi_weight_cafe(self, molecules: List[Dict[str, Any]], lambda_list: List[float], 
+                                   save_per_weight: bool, primary_set_mode: str) -> Dict[str, Any]:
+        """
+        Run selection with multiple CAFE weights and create primary set.
+        
+        Args:
+            molecules: List of scored molecules
+            lambda_list: List of lambda_cafe weights to test (renamed from beta_list)
+            save_per_weight: Whether to save TOP-100 per weight
+            primary_set_mode: "union" or "best"
+            
+        Returns:
+            Dictionary with final_diverse (primary set) and per_weight results
+        """
+        print(f"   Running multi-weight CAFE selection with {len(lambda_list)} weights")
+        
+        per_weight_results = {}
+        all_selected_smiles = set()
+        
+        # Run selection for each weight
+        for lambda_cafe in lambda_list:
+            print(f"   Processing lambda_cafe={lambda_cafe:.2f}...")
+            selected = self.selector.select_molecules(molecules, lambda_cafe=lambda_cafe)
+            final_diverse = selected.get("final_diverse", [])
+            
+            per_weight_results[lambda_cafe] = {
+                "final_diverse": final_diverse,
+                "n_selected": len(final_diverse)
+            }
+            
+            # Track all selected SMILES for union
+            for mol in final_diverse:
+                all_selected_smiles.add(mol.get("smiles", ""))
+        
+        # Create primary set
+        if primary_set_mode == "union":
+            # Union of all selected molecules from all weights
+            primary_set = []
+            seen_smiles = set()
+            for lambda_cafe in lambda_list:
+                for mol in per_weight_results[lambda_cafe]["final_diverse"]:
+                    smiles = mol.get("smiles", "")
+                    if smiles not in seen_smiles:
+                        primary_set.append(mol)
+                        seen_smiles.add(smiles)
+            
+            # Re-select from union using best weight (or first weight)
+            best_lambda = lambda_list[-1]  # Use highest weight for primary set
+            primary_selected = self.selector.select_molecules(primary_set, lambda_cafe=best_lambda)
+            primary_final = primary_selected.get("final_diverse", [])
+        else:
+            # Use best weight's selection
+            best_lambda = lambda_list[-1]
+            primary_final = per_weight_results[best_lambda]["final_diverse"]
         
         # Update statistics
+        self._update_selection_stats(molecules, {"final_diverse": primary_final})
+        
+        return {
+            "final_diverse": primary_final,
+            "per_weight": per_weight_results,
+            "primary_set_mode": primary_set_mode
+        }
+    
+    def _update_selection_stats(self, molecules: List[Dict[str, Any]], selected: Dict[str, Any]) -> None:
+        """Update selection statistics."""
         self.stats["pareto_size"] = len(selected.get("pareto_front", []))
         self.stats["final_size"] = len(selected.get("final_diverse", []))
         # Rejection breakdown across selection funnel
@@ -508,8 +508,6 @@ class ACGenerator:
             "scaffold_removed": 0,  # balance step currently keeps all
             "dedup_removed": max(0, diverse_n - final_n)
         }
-        
-        return selected
     
     def _save_results(self, results: Dict[str, Any], scored_molecules: List[Dict[str, Any]] = None) -> None:
         """Save all results to files."""
@@ -518,20 +516,40 @@ class ACGenerator:
         results_dir.mkdir(parents=True, exist_ok=True)
         
         files_config = output_config.get("files", {})
+        use_parquet = output_config.get("use_parquet", True)
         
-        # Save scored molecules CSV (optional)
-        if scored_molecules:
+        # Save full pool of unique molecules to Parquet (generate-once, select-many)
+        if scored_molecules and use_parquet:
+            if self.vanilla_mode:
+                pool_path = results_dir / "generated_pool_vanilla.parquet"
+            else:
+                pool_path = results_dir / "generated_pool_cafe.parquet"  # Explicit CAFE pool name
+            self._save_generated_pool(scored_molecules, pool_path)
+        
+        # Save scored molecules CSV (optional, for backward compatibility)
+        if scored_molecules and not use_parquet:
             scored_path = results_dir / files_config.get("post_score", "post_score.csv")
             self._save_scored_csv(scored_molecules, scored_path)
         
-        # Save final diverse set
+        # Save final diverse set with continuous ligand numbering
         if "final_diverse" in results:
             # Save as CSV file (publication-ready format)
             if self.vanilla_mode:
                 final_csv_path = results_dir / files_config.get("final_dataset_vanilla", "hits_vanilla.csv")
-            else:
-                final_csv_path = results_dir / files_config.get("final_dataset", "hits.csv")
-            self._save_scored_csv(results["final_diverse"], final_csv_path)
+                # Vanilla starts at ligand_id 1
+                self._save_scored_csv(results["final_diverse"], final_csv_path, start_ligand_id=1)
+            # NOTE: hits.csv (CAFE primary) removed - we have per-weight sets instead
+        
+        # Save per-weight results if available (with continuous numbering)
+        if "per_weight" in results and not self.vanilla_mode:
+            cafe_config = self.gen_config.get("selection", {}).get("cafe", {})
+            if cafe_config.get("save_per_weight", True):
+                # Start after vanilla (1-100) and primary CAFE (101-200)
+                start_id = 201
+                for lambda_cafe, weight_results in results["per_weight"].items():
+                    weight_csv_path = results_dir / f"hits_lambda_{lambda_cafe:.2f}.csv"
+                    self._save_scored_csv(weight_results["final_diverse"], weight_csv_path, start_ligand_id=start_id)
+                    start_id += 100  # Each set has 100 molecules
 
         # Save summary
         if self.vanilla_mode:
@@ -540,24 +558,110 @@ class ACGenerator:
             summary_path = results_dir / files_config.get("summary", "generation_summary.json")
         self._save_summary(summary_path)
         
+        # CAFE Ez scores no longer needed (using old ac_enrichment logic)
+        
         # Save additional monitoring files
         if "coverage_stats" in files_config:
             coverage_path = results_dir / files_config["coverage_stats"]
             self._save_coverage_stats(coverage_path)
         
-        if "fragment_usage" in files_config:
-            fragment_path = results_dir / files_config["fragment_usage"]
-            self._save_fragment_usage(fragment_path)
+    def create_hits_for_docking(self, results_dir: Path) -> None:
+        """
+        Create unified hits_for_docking.csv with unique ligands from:
+        - Vanilla primary set
+        - All CAFE per-weight sets
         
-        if "core_usage" in files_config:
-            core_path = results_dir / files_config["core_usage"]
-            self._save_core_usage(core_path)
+        Removes duplicates by SMILES to avoid docking the same molecule twice.
+        Uses original ligand_id from datasets (no renumbering).
+        """
+        files_config = self.gen_config.get("output", {}).get("files", {})
+        docking_path = results_dir / files_config.get("hits_for_docking", "hits_for_docking.csv")
+        
+        all_ligands = []
+        seen_smiles = set()
+        
+        # Load vanilla set (if exists)
+        vanilla_path = results_dir / files_config.get("final_dataset_vanilla", "hits_vanilla.csv")
+        if vanilla_path.exists():
+            vanilla_df = pd.read_csv(vanilla_path)
+            for _, row in vanilla_df.iterrows():
+                smiles = str(row.get("SMILES", ""))
+                if smiles and smiles not in seen_smiles:
+                    row_dict = row.to_dict()
+                    original_ligand_id = row_dict.get("ligand_id")  # Use original ligand_id
+                    row_dict["ligand_id"] = original_ligand_id  # Keep original ligand_id
+                    row_dict["source"] = "vanilla"
+                    all_ligands.append(row_dict)
+                    seen_smiles.add(smiles)
+        
+        # Load all per-weight CAFE sets
+        cafe_config = self.gen_config.get("selection", {}).get("cafe", {})
+        lambda_list = cafe_config.get("lambda_list", [])
+        for lambda_cafe in lambda_list:
+            weight_path = results_dir / f"hits_lambda_{lambda_cafe:.2f}.csv"
+            if weight_path.exists():
+                weight_df = pd.read_csv(weight_path)
+                for _, row in weight_df.iterrows():
+                    smiles = str(row.get("SMILES", ""))
+                    if smiles and smiles not in seen_smiles:
+                        row_dict = row.to_dict()
+                        original_ligand_id = row_dict.get("ligand_id")  # Use original ligand_id
+                        row_dict["ligand_id"] = original_ligand_id  # Keep original ligand_id
+                        row_dict["source"] = f"CAFE_lambda_{lambda_cafe:.2f}"
+                        all_ligands.append(row_dict)
+                        seen_smiles.add(smiles)
+        
+        # Save unified set
+        if all_ligands:
+            df = pd.DataFrame(all_ligands)
+            # Ensure ligand_id is first column, then source, then rest
+            priority_cols = ["ligand_id", "source"]
+            other_cols = [c for c in df.columns if c not in priority_cols]
+            cols = priority_cols + other_cols
+            df = df[cols]
+            df.to_csv(docking_path, index=False)
+            print(f"   Created hits_for_docking.csv with {len(all_ligands)} unique ligands (no duplicates)")
+        else:
+            print("   Warning: No ligands found to create hits_for_docking.csv")
     
-    def _save_scored_csv(self, molecules: List[Dict[str, Any]], filepath: Path) -> None:
+    def _save_generated_pool(self, molecules: List[Dict[str, Any]], filepath: Path) -> None:
+        """
+        Save full pool of unique molecules to Parquet with essential metadata only.
+        
+        Columns: smiles, core, arm, fragments_used, qsar_prob, sa, qed, score
+        (Removed: qsar_prob_raw, cafe_enrichment, cafe_boost, attempts, generation_time, valid_flags)
+        """
+        rows = []
+        for mol in molecules:
+            row = {
+                "smiles": mol.get("smiles", ""),
+                "core": mol.get("core", ""),
+                "arm": "vanilla" if self.vanilla_mode else "CAFE",
+                "fragments_used": "; ".join(mol.get("fragments_used", [])),
+                "qsar_prob": mol.get("qsar_prob", 0.0),
+                "sa": mol.get("sa", 0.0),
+                "qed": mol.get("qed", 0.0),
+                "score": mol.get("score", 0.0)
+            }
+            rows.append(row)
+        
+        df = pd.DataFrame(rows)
+        df.to_parquet(filepath, index=False, engine='pyarrow')
+        
+        if self.logger.level <= logging.INFO:
+            print(f"   Saved {len(rows)} molecules to {filepath}")
+    
+    def _save_scored_csv(self, molecules: List[Dict[str, Any]], filepath: Path, start_ligand_id: int = 1) -> None:
         """
         Save scored molecules to CSV file in publication-ready format.
         
+        Args:
+            molecules: List of molecule dictionaries
+            filepath: Path to save CSV file
+            start_ligand_id: Starting ligand ID for continuous numbering (default: 1)
+        
         Output columns:
+        - ligand_id: Unique ligand identifier (continuous numbering)
         - SMILES: Canonical SMILES string
         - core: Core scaffold SMARTS pattern
         - fragments: Fragment SMILES with (AC) flags for AC_added fragments
@@ -571,6 +675,7 @@ class ACGenerator:
         """
         # Build rows with required format
         rows = []
+        ligand_id = start_ligand_id
         for mol in molecules:
             smiles = mol.get("smiles", "")
             core = mol.get("core", "")
@@ -591,14 +696,11 @@ class ACGenerator:
             rank_val = mol.get("rank", None)   # Rank from ranking step (1 = highest score)
             
             # Extract CAFE LATE metadata
-            cafe_enrichment = 0.0
-            cafe_boost = 0.0
-            if "cafe" in mol and mol["cafe"].get("cafe_enabled"):
-                cafe_data = mol["cafe"]
-                cafe_enrichment = cafe_data.get("total_enrichment", 0.0)
-                cafe_boost = cafe_data.get("adjustment", 0.0)
+            cafe_enrichment = mol.get("cafe_enrichment", 0.0)  # Total ac_enrichment from unique fragments
+            cafe_boost = mol.get("cafe_bonus", 0.0)  # CAFE bonus = lambda_cafe * boost_factor
             
             row = {
+                "ligand_id": ligand_id,
                 "SMILES": smiles,
                 "core": core,
                 "fragments": fragments_str,
@@ -611,6 +713,7 @@ class ACGenerator:
                 "rank": rank_val if rank_val is not None else ""
             }
             rows.append(row)
+            ligand_id += 1
         
         df = pd.DataFrame(rows)
         df.to_csv(filepath, index=False)
@@ -643,42 +746,6 @@ class ACGenerator:
         
         with open(filepath, 'w') as f:
             json.dump(coverage_stats, f, indent=2)
-    
-    def _save_fragment_usage(self, filepath: Path) -> None:
-        """Save fragment usage statistics."""
-        if hasattr(self, 'sampler') and self.sampler:
-            fragment_attempts = self.sampler.fragment_attempts
-            fragment_list = self.sampler.fragment_list
-            
-            usage_data = []
-            for i, (fragment, attempts) in enumerate(zip(fragment_list, fragment_attempts)):
-                usage_data.append({
-                    "fragment_index": i,
-                    "fragment_smiles": fragment,
-                    "attempts": int(attempts),
-                    "usage_percentage": float(attempts / max(fragment_attempts) * 100) if max(fragment_attempts) > 0 else 0
-                })
-            
-            df = pd.DataFrame(usage_data)
-            df.to_csv(filepath, index=False)
-    
-    def _save_core_usage(self, filepath: Path) -> None:
-        """Save core usage statistics."""
-        if hasattr(self, 'molecular_generator') and self.molecular_generator:
-            cores = self.molecular_generator.cores
-            core_usage = self.molecular_generator.generation_stats.get("core_usage", {})
-            
-            core_data = []
-            for i, core in enumerate(cores):
-                core_data.append({
-                    "core_index": i,
-                    "core_smarts": core,
-                    "usage_count": core_usage.get(i, 0),
-                    "usage_percentage": float(core_usage.get(i, 0) / max(core_usage.values()) * 100) if max(core_usage.values()) > 0 else 0
-                })
-            
-            df = pd.DataFrame(core_data)
-            df.to_csv(filepath, index=False)
     
     
     def _log_final_statistics(self) -> None:

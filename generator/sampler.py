@@ -237,17 +237,3 @@ class FragmentSampler:
         self.n_cores = n_cores
         print(f"   Set core count to {n_cores}")
     
-    def track_core_usage(self, core_idx: int) -> None:
-        """Track core usage for statistics."""
-        self.core_attempts[core_idx] += 1
-    
-    def get_fragment_usage_by_core(self) -> Dict[int, Dict[str, Any]]:
-        """Get fragment usage statistics by core."""
-        core_usage = {}
-        for core_idx in range(self.n_cores):
-            core_usage[core_idx] = {
-                "attempts": self.core_attempts.get(core_idx, 0),
-                "fragment_attempts": dict(enumerate(self.fragment_attempts)),
-                "fragment_probs": dict(enumerate(self.fragment_probs))
-            }
-        return core_usage

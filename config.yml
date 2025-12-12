@@ -222,7 +222,6 @@ QSAR_Eval:
   
   # Model hyperparameters
   svc_C: 3.0                     # SVC regularization parameter (C)
-  linear_svm_C: 1.0             # LinearSVC regularization parameter (not currently used)
   knn_k: 15                      # Number of neighbors for KNN
   
   # Threshold optimization
@@ -335,10 +334,10 @@ Generator:
   
   # Generation parameters
   generation:
-    n_samples: 500000            # Target number of molecules to generate
+    n_samples: 500000            # Target number of molecules to generate (500k for full generation)
     batch_size: 5000              # Batch size for generation
-    max_attempts: 500            # Maximum attempts per molecule generation
-    timeout_seconds: 150          # Timeout per molecule generation (seconds)
+    max_attempts: 50              # Maximum attempts per molecule generation (reduced from 500 for speed)
+    timeout_seconds: 10           # Timeout per molecule generation (seconds, reduced from 150 for speed)
     max_mol_weight: 800           # Maximum molecular weight (Da) - allows 6-7 fragments avg
     min_mol_weight: 150           # Minimum molecular weight (Da) for meaningful fragments
     
@@ -370,21 +369,16 @@ Generator:
     qsar_model_path: "results/predictive_model/best_overall_model.joblib"  # QSAR model for activity prediction
     qsar_weight: 0.4             # Weight for QSAR probability in aggregate score (0.0-1.0)
     
-    sa_weight: 0.4               # Weight for SA (synthetic accessibility) score
-                                # Lower SA = more synthetically accessible (range typically 1-10)
+    sa_weight: 0.4               # Weight for SA (synthetic accessibility) score                            # Lower SA = more synthetically accessible (range typically 1-10)
     sa_max: 10.0                 # Maximum SA value for normalization (clamping)
     
     qed_weight: 0.2              # Weight for QED (Quantitative Estimate of Drug-likeness) score
     qed_floor: 0.1               # Minimum QED threshold (molecules below are filtered out)
     
     # CAFE LATE scoring (Late-stage Activity Cliff Fragment Enrichment)
-    # Post-generation scoring adjustment that corrects QSAR predictions for molecules
-    # containing AC-enriched fragments from CAFE analysis
-    # Only rewards fragments with selected_by == "AC_added" (not threshold fragments)
-    enable_cafe_scoring: true    # Enable CAFE LATE adjustment to QSAR scores
-    cafe_weight: 0.4             # Maximum CAFE LATE adjustment weight (0.0-1.0, increased for stronger impact)
-                                # Higher values give more weight to CAFE LATE fragment knowledge
-                                # Lower values trust QSAR more
+    # NOTE: CAFE LATE bonus is now applied in SELECTION stage using beta_cafe (see selection.cafe.beta_list)
+    # This parameter is kept for backward compatibility but is not used in new implementation
+    enable_cafe_scoring: true    # Enable CAFE LATE (loads fragments, but bonus applied in selection)
     enrichment_threshold: 1.0    # Minimum AC enrichment to consider (filters weak fragments)
     paths:
       fragments: "results/reverse_QSAR"  # Path to reverse QSAR results with AC fragment data
@@ -394,6 +388,7 @@ Generator:
     pareto_front:
       enable: true                # Enable Pareto optimization for multi-objective scoring
       k_front: 75000              # Keep top K molecules from Pareto front (~15% of 500k)
+      layered: true               # Enable layered Pareto (F0→F1→...)
     
     ranking:
       rank_top_k: 25000           # Select top K molecules by aggregate score
@@ -404,20 +399,31 @@ Generator:
         per_core_min: 10          # Minimum molecules per core scaffold
       method: "butina"            # Diversity method: "butina" (clustering) or "maxmin" (greedy)
       similarity_threshold: 0.7   # Tanimoto similarity threshold for diversity selection
+      multi_threshold: true       # Enable multi-threshold diversity (0.70 → 0.65 → 0.60 → 0.58)
+      thresholds: [0.70, 0.65, 0.60, 0.58]  # Progressive thresholds for diversity
+      fill_to_100: true           # Fill to exactly 100 molecules using relaxed thresholds
+    
+    # CAFE LATE selection parameters
+    cafe:
+      lambda_list: [0.4, 0.6, 0.8, 1.0, 1.2, 1.5]  # List of lambda_cafe weights to test (0.4 = delicate, 1.5 = strong)
+      unique_only: true           # Use only unique fragments (no count multiplication) - each fragment counted once per molecule
+      save_per_weight: true       # Save TOP-100 for each lambda_cafe weight
+      primary_set_mode: "union"   # How to create primary set: "union" (all weights) or "best" (single best weight)
   
   # Output configuration
   output:
     results_dir: "results/generation"
     log_interval: 5000            # Log progress every N molecules
+    use_parquet: true             # Use Parquet format for large datasets (faster, smaller)
     
     files:
       post_score: "post_score.csv"        # Scored molecules before selection (optional)
+      generated_pool: "generated_pool.parquet"  # Full pool of unique molecules (Parquet format)
       final_dataset: "hits.csv"           # Final selected molecules with scores and metadata (CAFE mode)
       final_dataset_vanilla: "hits_vanilla.csv"  # Final selected molecules for vanilla mode (validation)
+      hits_for_docking: "hits_for_docking.csv"  # Unified set for docking (vanilla + all CAFE, no duplicates)
       summary: "generation_summary.json"   # Generation statistics and metadata (CAFE mode)
       summary_vanilla: "generation_summary_vanilla.json"  # Generation statistics for vanilla mode
-      fragment_usage: "fragment_usage.csv"  # Fragment usage statistics (optional)
-      core_usage: "core_usage.csv"        # Core scaffold usage statistics (optional)
   
   # Vanilla generation mode (validation)
-  vanilla_only: true                     # If true, run only vanilla generation (skip CAFE generation)
+  vanilla_only: false                    # If true, run only vanilla generation (skip CAFE generation)
