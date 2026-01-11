@@ -24,7 +24,7 @@ fragments_df <- read_csv(file.path("results/reverse_QSAR", best_model, "all_frag
 cat(sprintf("Best model: %s\n\n", best_model))
 
 # Panel A: Metrics comparison
-metrics_to_plot <- c("AUPRC_active", "F1", "Precision", "MCC")
+metrics_to_plot <- c("AUROC", "AUPRC_active", "MCC", "Brier")
 plot_data <- runs_df %>%
   select(model, all_of(metrics_to_plot)) %>%
   pivot_longer(cols = all_of(metrics_to_plot), names_to = "metric", values_to = "value") %>%

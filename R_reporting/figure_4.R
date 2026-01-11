@@ -30,6 +30,21 @@ df <- bind_rows(all_runs) %>%
 # Prepare data
 df$descriptor <- factor(df$descriptor, levels = backbones)
 
+# Filter out NA and zero values for Cliff_RMSE
+# NA: when no cliff pairs in test set
+# Zero: artifacts (RMSE_cliff cannot be exactly 0 for real data)
+# Use strict filtering: > 0 (not >= 0) to exclude any zero values
+df <- df %>%
+  filter(!is.na(Cliff_RMSE)) %>%
+  filter(Cliff_RMSE > 0) %>%
+  filter(Cliff_RMSE != 0)  # Explicitly exclude zero (handles potential rounding issues)
+
+# Verify no zeros remain
+zero_count <- sum(df$Cliff_RMSE == 0, na.rm = TRUE)
+if (zero_count > 0) {
+  warning(sprintf("WARNING: Found %d zero values after filtering! This should not happen.", zero_count))
+}
+
 algo_order <- df %>%
   group_by(algorithm) %>%
   summarise(mean_cliff = mean(Cliff_RMSE, na.rm = TRUE)) %>%
