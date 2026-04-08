@@ -141,15 +141,15 @@ panel_b_summary <- panel_b_data %>%
 
 panel_theme <- theme(
   plot.title = element_text(size = 12, face = "bold", hjust = 0.5),
-  axis.text.x = element_text(angle = 45, hjust = 1, size = 12, face = "plain"),
-  axis.text.y = element_text(size = 12),
-  axis.title.x = element_text(size = 14, face = "bold"),
-  axis.title.y = element_text(size = 14, face = "bold"),
+  axis.text.x = element_text(angle = 45, hjust = 1, size = 14, face = "plain"),
+  axis.text.y = element_text(size = 14),
+  axis.title.x = element_text(size = 18, face = "bold"),
+  axis.title.y = element_text(size = 18, face = "bold"),
   strip.background = element_blank(),
-  strip.text = element_text(face = "bold", size = 13),
-  legend.title = element_text(size = 15, face = "bold", hjust = 0.5),
-  legend.text = element_text(size = 13, face = "bold"),
-  legend.key.size = unit(0.85, "cm"),
+  strip.text = element_text(face = "bold", size = 15),
+  legend.title = element_text(size = 17, face = "bold", hjust = 0.5),
+  legend.text = element_text(size = 15, face = "bold"),
+  legend.key.size = unit(1.0, "cm"),
   legend.background = element_rect(fill = "white", color = "black", linewidth = 0.6),
   legend.title.align = 0.5,
   panel.spacing = unit(0.2, "lines")
@@ -230,10 +230,10 @@ make_engine_plot <- function(engine, show_x_label = FALSE, show_y_label = FALSE,
     default_theme +
     panel_theme +
     theme(
-      axis.text.x = element_text(angle = 0, hjust = 0.5, size = 13, face = "plain"),
-      axis.text.y = element_text(size = 13),
-      axis.title = element_text(size = 16, face = "bold"),
-      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      axis.text.x = element_text(angle = 0, hjust = 0.5, size = 14, face = "plain"),
+      axis.text.y = element_text(size = 14),
+      axis.title = element_text(size = 18, face = "bold"),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
       legend.position = if (show_legend) "bottom" else "none",
       legend.box = "horizontal",
       legend.direction = "horizontal"
@@ -265,9 +265,9 @@ legend_plot <- ggplot(
     legend.position = "bottom",
     legend.box = "horizontal",
     legend.direction = "horizontal",
-    legend.title = element_text(size = 15, face = "bold", hjust = 0.5),
-    legend.text = element_text(size = 13, face = "bold"),
-    legend.key.size = unit(0.85, "cm"),
+    legend.title = element_text(size = 17, face = "bold", hjust = 0.5),
+    legend.text = element_text(size = 15, face = "bold"),
+    legend.key.size = unit(1.0, "cm"),
     legend.background = element_rect(fill = "white", color = "black", linewidth = 0.95),
     legend.spacing.x = unit(0.25, "cm"),
     legend.spacing.y = unit(0.2, "cm"),
@@ -301,11 +301,11 @@ panel_b_full <- plot_grid(panel_b, legend_b, ncol = 1, rel_heights = c(1, 0.12))
 
 # Combine panels (Panel A on top, B bottom)
 final_fig <- plot_grid(panel_a, panel_b_full, ncol = 1, labels = c("A", "B"),
-                       label_size = 18, label_fontface = "bold", rel_heights = c(0.55, 1.45))
+                       label_size = 20, label_fontface = "bold", rel_heights = c(0.55, 1.45))
 
 # Save
 dir.create("R_reporting/figures", showWarnings = FALSE, recursive = TRUE)
-ggsave("R_reporting/figures/Figure_4.pdf", final_fig, width = 14, height = 10.5, dpi = 500, device = cairo_pdf)
-ggsave("R_reporting/figures/Figure_4.png", final_fig, width = 14, height = 10.5, dpi = 500, bg = "white")
+ggsave("R_reporting/figures/Figure_4.pdf", final_fig, width = 10, height = 13, dpi = 600, device = cairo_pdf)
+ggsave("R_reporting/figures/Figure_4.png", final_fig, width = 10, height = 13, dpi = 600, bg = "white")
 
 cat("\nFigure 4 saved (500 DPI)\n\n")
