@@ -486,7 +486,7 @@ def run_ac_analysis(
         # Generate combined publication-quality figure
         plot_combined_ac_figures(
             cliffs_df, df, smiles_col, potency_col,
-            os.path.join(results_dir, "combined_ac_figure_(Figure_2).png"),
+            os.path.join(results_dir, "combined_ac_figure_(Figure_3).png"),
             config,
             **tsne_params
         )

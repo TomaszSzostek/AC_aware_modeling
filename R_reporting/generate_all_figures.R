@@ -24,7 +24,7 @@ figures_ok <- c()
 figures_fail <- c()
 
 # Figure 3
-cat(strrep("=", 80), "\n", "Figure 3: Reverse QSAR\n", strrep("=", 80), "\n")
+cat(strrep("=", 80), "\n", "Figure 3: Combined Activity Cliff Analysis\n", strrep("=", 80), "\n")
 if (file.exists("R_reporting/figure_3.R")) {
   tryCatch({
     source("R_reporting/figure_3.R", echo = FALSE, print.eval = FALSE)
@@ -38,7 +38,7 @@ if (file.exists("R_reporting/figure_3.R")) {
 }
 
 # Figure 4
-cat("\n", strrep("=", 80), "\n", "Figure 4: Predictive Models\n", strrep("=", 80), "\n")
+cat("\n", strrep("=", 80), "\n", "Figure 4: Reverse QSAR\n", strrep("=", 80), "\n")
 if (file.exists("R_reporting/figure_4.R")) {
   tryCatch({
     source("R_reporting/figure_4.R", echo = FALSE, print.eval = FALSE)
@@ -49,6 +49,34 @@ if (file.exists("R_reporting/figure_4.R")) {
   })
 } else {
   cat("Skipping Figure 4: figure_4.R not found\n\n")
+}
+
+# Figure 5
+cat("\n", strrep("=", 80), "\n", "Figure 5: Split-Aware Predictive Performance\n", strrep("=", 80), "\n")
+if (file.exists("R_reporting/figure_5.R")) {
+  tryCatch({
+    source("R_reporting/figure_5.R", echo = FALSE, print.eval = FALSE)
+    figures_ok <- c(figures_ok, "Figure 5")
+  }, error = function(e) {
+    cat(sprintf("\nFailed: %s\n\n", e$message))
+    figures_fail <- c(figures_fail, "Figure 5")
+  })
+} else {
+  cat("Skipping Figure 5: figure_5.R not found\n\n")
+}
+
+# Figure 6
+cat("\n", strrep("=", 80), "\n", "Figure 6: Calibration (ECE vs ECEcliff)\n", strrep("=", 80), "\n")
+if (file.exists("R_reporting/figure_6.R")) {
+  tryCatch({
+    source("R_reporting/figure_6.R", echo = FALSE, print.eval = FALSE)
+    figures_ok <- c(figures_ok, "Figure 6")
+  }, error = function(e) {
+    cat(sprintf("\nFailed: %s\n\n", e$message))
+    figures_fail <- c(figures_fail, "Figure 6")
+  })
+} else {
+  cat("Skipping Figure 6: figure_6.R not found\n\n")
 }
 
 # Summary
